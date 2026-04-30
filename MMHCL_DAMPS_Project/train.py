@@ -215,9 +215,35 @@ class Trainer:
             faiss_threshold=args.faiss_threshold,
             chunk_size=args.knn_chunk_size,
             normalize=True,
+            faiss_use_gpu=bool(args.faiss_use_gpu),
+            ef_search=int(args.knn_efsearch),
         )
         self.warmup_epochs: int = max(1, int(args.damps_warmup_epochs))
         self.rebuild_R: int = max(1, int(args.rebuild_R))
+
+        # ---------------- torch.compile (Speedup Guide Section 4) ----------------
+        # We compile ONLY the DAMPS submodule -- never the full forward path:
+        # the full forward consumes the periodically-rebuilt ``Item_mat``
+        # (sparse tensor with changing nnz), which would trigger expensive
+        # recompilations. The DAMPS submodule has fixed input/output shapes
+        # so it is safe to compile with dynamic=True.
+        if bool(args.use_torch_compile) and hasattr(torch, "compile"):
+            try:
+                self.model.damps = torch.compile(           # type: ignore[assignment]
+                    self.model.damps,
+                    mode=str(args.torch_compile_mode),
+                    dynamic=bool(args.torch_compile_dynamic),
+                )
+                self.logger.logging(
+                    f"[speedup] torch.compile enabled on DAMPS submodule "
+                    f"(mode={args.torch_compile_mode}, "
+                    f"dynamic={bool(args.torch_compile_dynamic)})"
+                )
+            except Exception as exc:                        # pragma: no cover
+                self.logger.logging(
+                    f"[speedup] torch.compile failed to attach: {exc}; "
+                    f"continuing in eager mode."
+                )
 
         # ---------------- W&B (optional) ----------------
         self.wandb: Any = None

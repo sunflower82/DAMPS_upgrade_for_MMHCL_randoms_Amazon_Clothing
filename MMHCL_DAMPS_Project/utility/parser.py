@@ -163,15 +163,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rebuild_R", type=int, default=5,
                         help="Rebuild K-NN hypergraph every R epochs.")
     parser.add_argument("--faiss_threshold", type=int, default=60_000,
-                        help="N >= threshold → switch to FAISS HNSW path.")
+                        help="N >= threshold -> switch to FAISS HNSW path.")
     parser.add_argument("--knn_chunk_size", type=int, default=4_096,
                         help="Row-chunk size for the chunked PyTorch K-NN path.")
+    parser.add_argument("--faiss_use_gpu", type=int, default=1,
+                        help="1 = use FAISS GPU resources when available "
+                             "(StandardGpuResources + index_cpu_to_gpu); "
+                             "0 = stay on CPU FAISS. Speedup guide Section 2.")
+    parser.add_argument("--knn_efsearch", type=int, default=64,
+                        help="HNSW efSearch parameter (controls recall/speed "
+                             "trade-off). Higher = better recall, slower.")
 
     # =====================================================================
     #  Mixed Precision (bfloat16)
     # =====================================================================
     parser.add_argument("--use_amp", type=int, default=1,
                         help="1 = enable bfloat16 mixed precision training.")
+
+    # =====================================================================
+    #  Training Speedup Flags (Speedup Guide, Sections 1-10)
+    # =====================================================================
+    parser.add_argument("--use_torch_compile", type=int, default=0,
+                        help="1 = wrap the DAMPS spectral block in "
+                             "torch.compile (PyTorch >= 2.0). Reported "
+                             "+25-35%% speedup on the GNN forward path.")
+    parser.add_argument("--torch_compile_mode", type=str, default="reduce-overhead",
+                        help="torch.compile mode: {default, reduce-overhead, "
+                             "max-autotune}. 'reduce-overhead' is best for "
+                             "medium-sized models per the speedup guide.")
+    parser.add_argument("--torch_compile_dynamic", type=int, default=1,
+                        help="1 = compile with dynamic=True (required because "
+                             "the BPR triplet batch size can vary by 1 between "
+                             "epochs).")
 
     # =====================================================================
     #  Ablation Tag

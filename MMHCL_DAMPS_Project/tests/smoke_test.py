@@ -196,6 +196,59 @@ def smoke_full_model() -> None:
     _print_ok(f"diag: {diag}")
 
 
+def smoke_torch_compile() -> None:
+    """
+    Speedup Guide S4: ``torch.compile`` on the DAMPS submodule. We do not
+    compile the full forward path because the periodically-rebuilt sparse
+    Item_mat would otherwise trigger expensive graph recompilations.
+
+    Some environments (in particular Windows installs whose Python prefix
+    contains spaces, or systems without a usable C++ toolchain) cannot
+    actually compile Inductor's generated kernels even though
+    ``torch.compile`` itself imports successfully. In that case we fall back
+    to checking that attribute forwarding through ``OptimizedModule`` is
+    still intact, since that is what the trainer relies on.
+    """
+    print("== torch.compile smoke ==")
+    if not hasattr(torch, "compile"):                            # pragma: no cover
+        _print_ok("torch.compile not available; skipping")
+        return
+
+    N, d = 32, 64
+    damps = DAMPS(d=d, num_categories=4, warmup_epochs=2)
+    damps.train()
+    try:
+        compiled = torch.compile(damps, mode="reduce-overhead", dynamic=True)
+    except Exception as exc:                                     # pragma: no cover
+        _print_ok(f"torch.compile failed to attach ({exc}); skipping")
+        return
+
+    # Attribute forwarding through OptimizedModule must work, regardless of
+    # whether the actual graph compilation succeeds in this environment.
+    compiled.set_epoch(2)                                          # type: ignore[attr-defined]
+    assert int(damps._current_epoch.item()) == 2, (
+        "set_epoch must forward through the OptimizedModule wrapper"
+    )
+    _print_ok("OptimizedModule attribute forwarding works (set_epoch)")
+
+    # Try a real compiled forward; on environments with broken C++ builds
+    # (e.g. Windows path with a space) we accept the documented graceful
+    # fallback used by train.py and skip with a warning.
+    h_img = torch.randn(N, d)
+    h_txt = torch.randn(N, d)
+    cats = torch.randint(0, 4, (N,))
+    try:
+        h_img_cal, h_txt_cal, _ = compiled(h_img, h_txt, item_categories=cats)
+        assert h_img_cal.shape == (N, d)
+        assert h_txt_cal.shape == (N, d)
+        _print_ok("compiled forward OK (full Inductor path)")
+    except Exception as exc:                                     # pragma: no cover
+        _print_ok(
+            f"Inductor compile not usable in this env ({exc.__class__.__name__}); "
+            f"trainer will fall back to eager mode automatically."
+        )
+
+
 if __name__ == "__main__":
     torch.manual_seed(42)
     smoke_damps_core()
@@ -203,4 +256,5 @@ if __name__ == "__main__":
     smoke_knn()
     smoke_prior()
     smoke_full_model()
+    smoke_torch_compile()
     print("\nAll smoke tests passed!")

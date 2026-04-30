@@ -87,6 +87,9 @@ class DualPathKNN:
         faiss_threshold: int = 60_000,
         chunk_size: int = 4_096,
         normalize: bool = True,
+        faiss_use_gpu: bool = True,
+        ef_search: int = 64,
+        hnsw_M: int = 32,
     ) -> None:
         if k <= 0:
             raise ValueError(f"k must be positive, got k={k}")
@@ -94,6 +97,9 @@ class DualPathKNN:
         self.faiss_threshold: int = int(faiss_threshold)
         self.chunk_size: int = int(chunk_size)
         self.normalize: bool = bool(normalize)
+        self.faiss_use_gpu: bool = bool(faiss_use_gpu)
+        self.ef_search: int = int(ef_search)
+        self.hnsw_M: int = int(hnsw_M)
 
     # ------------------------------------------------------------------
     #  Multi-modal hypergraph (recommended entry point)
@@ -230,43 +236,72 @@ class DualPathKNN:
     #  Path 2: FAISS GPU (mandatory fallback for N >= 60k)
     # ------------------------------------------------------------------
     def _build_faiss(self, features: torch.Tensor) -> torch.Tensor:
-        """FAISS GPU IndexHNSWFlat path — O(N log N) in N."""
+        """
+        FAISS HNSW path with optional GPU acceleration -- O(N log N) in N.
+
+        Implements the recipe from the DAMPS-MMHCL Speedup Guide (Section 2):
+        ``IndexHNSWFlat`` over L2-normalised vectors with inner product as the
+        metric, optionally moved to GPU via ``StandardGpuResources`` and
+        ``index_cpu_to_gpu`` for 5-10x throughput on large N. The neighbour
+        post-processing is fully vectorised (no per-row Python loop).
+        """
         if not FAISS_AVAILABLE:
-            raise RuntimeError("FAISS is not available — cannot use Path 2")
+            raise RuntimeError("FAISS is not available -- cannot use Path 2")
         import faiss                                              # type: ignore[import-not-found]
 
         N, d = features.shape
         feats_np = features.detach().cpu().numpy().astype("float32")
 
-        # HNSW with M=32 (FAISS default for high-dimensional vectors).
-        # Use cosine similarity via L2-normalised vectors + inner-product index.
-        index = faiss.IndexHNSWFlat(d, 32, faiss.METRIC_INNER_PRODUCT)
-        index.add(feats_np)
-        # Ask for k+1 because the top-1 hit is the query itself.
+        # ---- Build the HNSW CPU index ----
+        index = faiss.IndexHNSWFlat(d, self.hnsw_M, faiss.METRIC_INNER_PRODUCT)
+        index.hnsw.efSearch = self.ef_search
+        index.hnsw.efConstruction = max(self.ef_search, 40)
+
+        # ---- Optionally move to GPU (5-10x faster for batched queries) ----
+        gpu_index = index
+        if self.faiss_use_gpu and features.is_cuda:
+            try:
+                res = faiss.StandardGpuResources()
+                # IndexHNSW is a CPU-only structure but FAISS exposes GPU
+                # search via ``index_cpu_to_gpu`` on supported builds.
+                gpu_index = faiss.index_cpu_to_gpu(res, features.device.index or 0, index)
+                logger.info("[DualPathKNN] FAISS index moved to GPU.")
+            except Exception as exc:                              # pragma: no cover
+                logger.warning(
+                    "[DualPathKNN] GPU FAISS unavailable (%s); falling back to CPU FAISS.",
+                    exc,
+                )
+                gpu_index = index
+
+        gpu_index.add(feats_np)
+        # Ask for k+1 because the top-1 hit is almost always the query itself.
         k_plus = min(self.k + 1, N)
-        _, idxs = index.search(feats_np, k_plus)
+        _, idxs = gpu_index.search(feats_np, k_plus)
 
-        # Vectorised self-edge removal: build a column mask, then take the
-        # first ``k`` neighbours that are not the row index itself.
-        idxs_t = torch.from_numpy(idxs).to(features.device)
+        # ---- Fully vectorised self-edge removal ----
+        # Strategy: copy idxs into device tensor, mark self-matches with a
+        # large sentinel, then take the leading ``k`` non-self entries per
+        # row in one stable_sort pass.
+        idxs_t = torch.from_numpy(idxs).to(features.device).long()
         row_global = torch.arange(N, device=features.device).unsqueeze(1)
-        keep = idxs_t != row_global                                # (N, k+1) bool
-        # Replace self-matches with a sentinel that loses the topk argsort
-        idxs_t = torch.where(keep, idxs_t, torch.full_like(idxs_t, -1))
+        is_self = idxs_t == row_global                              # (N, k+1) bool
+        # Replace self-matches with a sentinel that sorts AFTER everything
+        sentinel = torch.full_like(idxs_t, fill_value=N + 1)
+        idxs_t = torch.where(is_self, sentinel, idxs_t)
+        # Stable sort: surviving real neighbours bubble to the front
+        idxs_sorted, _ = torch.sort(idxs_t, dim=1, stable=True)
+        col_idx = idxs_sorted[:, : self.k].clone()                 # (N, k)
 
-        # For each row, keep the first ``k`` non-self entries
-        cols: list[torch.Tensor] = []
-        for r in range(N):
-            row = idxs_t[r]
-            row = row[row >= 0][: self.k]
-            if row.numel() < self.k:
-                # Pad with the row itself (extreme cold-start corner case)
-                pad = torch.full((self.k - row.numel(),), r,
-                                  dtype=row.dtype, device=row.device)
-                row = torch.cat([row, pad])
-            cols.append(row)
-        col_idx = torch.stack(cols).reshape(-1)
+        # Replace any leftover sentinels (cold-start: all k+1 neighbours were
+        # self) with the row index itself so the sparse tensor is well-formed.
+        sentinel_mask = col_idx >= N
+        if bool(sentinel_mask.any()):
+            self_fill = (
+                torch.arange(N, device=features.device).unsqueeze(1).expand(-1, self.k)
+            )
+            col_idx = torch.where(sentinel_mask, self_fill, col_idx)
 
+        col_idx = col_idx.reshape(-1)
         row_idx = (
             torch.arange(N, device=features.device)
             .unsqueeze(1)
