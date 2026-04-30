@@ -89,8 +89,11 @@ def parse_args() -> argparse.Namespace:
                         help="Weight for user-side contrastive loss.")
     parser.add_argument("--item_loss_ratio", type=float, default=0.07,
                         help="Weight for item-side contrastive loss.")
-    parser.add_argument("--temperature", type=float, default=0.6,
-                        help="Initial value for the InfoNCE temperature τ.")
+    parser.add_argument("--temperature", type=float, default=0.1,
+                        help="Initialisation value for the *learnable* "
+                             "InfoNCE temperature tau (Revision 9 spec, "
+                             "Section 3.1: tau is an nn.Parameter init at "
+                             "0.1, dynamically clamped to >= 0.01).")
 
     # =====================================================================
     #  Evaluation

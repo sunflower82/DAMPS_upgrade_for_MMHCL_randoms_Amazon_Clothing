@@ -505,8 +505,9 @@ class Trainer:
                     best_ndcg = float(val["ndcg"][1])
                 test_ret = self.test(users_to_test, is_val=False)
                 self.logger.logging(
-                    f"Test_Recall@{Ks[1]}={test_ret['recall'][1]:.6f}  "
-                    f"Test_NDCG@{Ks[1]}={test_ret['ndcg'][1]:.6f}"
+                    f"Test_Recall@{Ks[1]}: {test_ret['recall'][1]:.8f}  "
+                    f"Test_Precision@{Ks[1]}: {test_ret['precision'][1]:.8f}  "
+                    f"Test_NDCG@{Ks[1]}: {test_ret['ndcg'][1]:.8f}"
                 )
                 if self.wandb is not None:
                     self.wandb.log({
@@ -534,11 +535,17 @@ class Trainer:
         # ---------------- Final summary ----------------
         if isinstance(test_ret, dict):
             self.logger.logging(
-                f"BEST_Test_Recall@{Ks[1]}={test_ret['recall'][1]:.8f}  "
-                f"BEST_Test_NDCG@{Ks[1]}={test_ret['ndcg'][1]:.8f}"
+                f"BEST_Test_Recall@{Ks[1]}: {test_ret['recall'][1]:.8f}"
+            )
+            self.logger.logging(
+                f"BEST_Test_Precision@{Ks[1]}: {test_ret['precision'][1]:.8f}"
+            )
+            self.logger.logging(
+                f"BEST_Test_NDCG@{Ks[1]}: {test_ret['ndcg'][1]:.8f}"
             )
             if self.wandb is not None:
                 self.wandb.summary[f"best_test_recall@{Ks[-1]}"] = test_ret["recall"][1]
+                self.wandb.summary[f"best_test_precision@{Ks[-1]}"] = test_ret["precision"][1]
                 self.wandb.summary[f"best_test_ndcg@{Ks[-1]}"] = test_ret["ndcg"][1]
 
         self.logger.logging(str(test_ret))

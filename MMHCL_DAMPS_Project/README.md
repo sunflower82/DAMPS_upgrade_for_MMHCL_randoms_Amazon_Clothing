@@ -164,6 +164,25 @@ The eight-row defensive ablation table from §6 of the spec maps onto these flag
 7. **Full DAMPS-MMHCL** — all defaults
 8. **Permutation-FFT falsification** — `--damps_permutation_fft 1`
 
+For the dedicated paired-seed Permutation-FFT falsifiability protocol
+(spec Section 6, Item 8) use the helper scripts:
+
+```bash
+# Linux / macOS
+N_SEEDS=3 SEED_BASE=42 ./scripts/run_permutation_fft_ablation.sh
+
+# Windows (cmd / PowerShell)
+set N_SEEDS=3 & set SEED_BASE=42 & scripts\run_permutation_fft_ablation.bat
+
+# Aggregate the paired runs and compute the t-test:
+python scripts/_aggregate_permutation_fft.py --seeds 42 43 44
+```
+
+The aggregator parses `BEST_Test_Recall@20` / `BEST_Test_NDCG@20` from each
+per-run log file, performs a paired t-test, and prints the spec's binary
+verdict: switch to DCT-II if `|gap| < 1 %`, otherwise the standard 1-D FFT
+is validated.
+
 ---
 
 ## 5. Diagnostic Logs Produced

@@ -55,7 +55,7 @@ def smoke_damps_core() -> None:
     loss = (h_img_cal.pow(2).sum() + h_txt_cal.pow(2).sum()) * 1e-3
     loss.backward()
     grad_count = sum(p.grad is not None for p in damps.parameters())
-    assert grad_count >= 4, f"expected ≥4 grads, got {grad_count}"
+    assert grad_count >= 4, f"expected >=4 grads, got {grad_count}"
     _print_ok(f"forward + backward, {damps.num_trainable_params()} params")
 
     sat = damps.tanh_saturation_rates()
@@ -63,6 +63,33 @@ def smoke_damps_core() -> None:
 
     damps.update_epoch_mad(0, h_img, h_txt)
     _print_ok("update_epoch_mad runs")
+
+    # ----- IMCF EMA epoch-counter regression test (compliance WARN 3) -----
+    # Run several forward passes inside a single "epoch": the per-forward-pass
+    # counter must keep ticking, but the *current epoch* (which drives the
+    # adaptive EMA schedule) must NOT change unless ``set_epoch`` is called.
+    damps.zero_grad(set_to_none=True)
+    damps.set_epoch(3)
+    fwd_before = float(damps._imcf_update_count.item())
+    epoch_before = int(damps._current_epoch.item())
+    for _ in range(5):
+        damps(h_img, h_txt, item_categories=cats)
+    fwd_after = float(damps._imcf_update_count.item())
+    epoch_after = int(damps._current_epoch.item())
+    assert fwd_after - fwd_before == 5, (
+        f"forward-pass counter expected +5, got "
+        f"+{fwd_after - fwd_before}"
+    )
+    assert epoch_after == epoch_before == 3, (
+        f"epoch counter must stay at 3 across forward passes, got "
+        f"before={epoch_before}, after={epoch_after}"
+    )
+    damps.set_epoch(7)
+    assert int(damps._current_epoch.item()) == 7
+    _print_ok(
+        "IMCF schedule: forward-pass counter +5, epoch held at 3 then "
+        "advanced to 7 via set_epoch"
+    )
 
 
 def smoke_momentum() -> None:
@@ -131,6 +158,14 @@ def smoke_full_model() -> None:
         warmup_epochs=2,
     )
     model.set_meta_categories(torch.randint(0, 4, (n_items,)))
+
+    # ----- Tau-init regression test (compliance WARN 2) -------------------
+    # The Revision 9 spec mandates that the learnable InfoNCE temperature
+    # is initialised at 0.1; verify the default constructor honours this.
+    assert abs(float(model.tau.item()) - 0.1) < 1e-6, (
+        f"learnable tau must be initialised at 0.1, got {float(model.tau.item())}"
+    )
+    _print_ok(f"learnable tau initialised at {float(model.tau.item()):.4f} (spec=0.1)")
 
     # Build trivial graphs (identity-like sparse tensors)
     UI = torch.eye(n_users + n_items).to_sparse_coo()

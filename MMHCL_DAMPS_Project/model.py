@@ -118,7 +118,7 @@ class DAMPS_MMHCL(nn.Module):
         weight_size: Optional[list[int]] = None,
         item_loss_ratio: float = 0.07,
         user_loss_ratio: float = 0.03,
-        temperature_init: float = 0.6,
+        temperature_init: float = 0.1,
         warmup_epochs: int = 10,
         damps_num_categories: int = 10,
         data_driven_prior: bool = True,
@@ -284,8 +284,11 @@ class DAMPS_MMHCL(nn.Module):
         )
 
         # ------------------------------------------------------------------
-        # 9. Learnable InfoNCE temperature (initialised at user-supplied
-        #     value, then unconstrained → clamped to >= 0.01 in forward)
+        # 9. Learnable InfoNCE temperature (Revision 9 spec, Section 3.1).
+        #    Default initialisation = 0.1; can be overridden via the
+        #    ``temperature_init`` constructor argument or the
+        #    ``--temperature`` CLI flag in train.py. Clamped to >= 0.01 in
+        #    ``batched_contrastive_loss`` to prevent division blow-ups.
         # ------------------------------------------------------------------
         self.tau = nn.Parameter(torch.tensor(float(temperature_init)))
 
@@ -384,6 +387,12 @@ class DAMPS_MMHCL(nn.Module):
         # =====================================================================
         # (A) DAMPS calibration pass (cheap: ~5 ms for N=23k on RTX 5090)
         # =====================================================================
+        # Drive the IMCF / MAD adaptive EMA schedule via the explicit epoch
+        # index from the trainer (Revision 9 audit WARN 3). Without this,
+        # ``_apply_imcf`` would tick its counter once per forward pass and
+        # exhaust ``warmup_epochs`` inside the first real epoch.
+        if self.training:
+            self.damps.set_epoch(epoch)
         (
             h_img_raw,
             h_txt_raw,
@@ -576,5 +585,7 @@ class DAMPS_MMHCL(nn.Module):
             "tanh_sat_aud": sat["aud"] if self.has_audio else None,
             "lambda_coh": float(self.damps.lambda_coh.item()),
             "baseline_asc": float(self.damps.baseline_asc.item()),
+            "imcf_epoch": int(self.damps._current_epoch.item()),
+            "imcf_forward_passes": int(self.damps._imcf_update_count.item()),
             "momentum_init": self.momentum.initialised_count(),
         }
