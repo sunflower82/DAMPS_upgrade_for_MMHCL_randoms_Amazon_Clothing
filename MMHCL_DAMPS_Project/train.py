@@ -50,6 +50,44 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
+# -------------------------------------------------------------------------
+# torch.compile + complex-FFT backward Inductor crash workaround
+# -------------------------------------------------------------------------
+# PyTorch's Inductor backward compiler on Windows/CUDA builds currently has
+# a bug when lowering the backward of complex-tensor regions (rFFT -> APC/
+# AVRF/IMCF -> iRFFT), which surfaces as:
+#
+#    torch._inductor.exc.InductorError:
+#        AttributeError: 'complex' object has no attribute 'get_name'
+#
+# (a Python ``complex(...)`` scalar leaks into Inductor's IR aliasing
+# handler, which then crashes in ``add_alias``). The forward path compiles
+# fine; only the backward graph for the FFT region is affected.
+#
+# The PyTorch-canonical fix is ``suppress_errors``: when set, Dynamo /
+# AOT-autograd catch Inductor compile errors at runtime and silently fall
+# back to eager mode for the offending subgraph instead of propagating the
+# crash. Net effect:
+#
+#   * Forward compile keeps whatever speedup Inductor can deliver.
+#   * Backward of the complex FFT subgraph runs in eager mode.
+#   * Training never crashes mid-step on this PyTorch build.
+#
+# We also set ``capture_scalar_outputs`` so the .item() graph break in
+# damps/core.py:_apply_imcf doesn't introduce an extra recompilation per
+# epoch when the IMCF schedule advances.
+try:
+    import torch._dynamo                                              # type: ignore[import-untyped]
+    torch._dynamo.config.suppress_errors = True
+    # Best-effort: not all torch versions expose this knob, hence the
+    # outer try/except already covers AttributeError.
+    if hasattr(torch._dynamo.config, "capture_scalar_outputs"):
+        torch._dynamo.config.capture_scalar_outputs = True
+except Exception:
+    # If torch._dynamo isn't importable on this build, --use_torch_compile
+    # is already a no-op so there is nothing to suppress.
+    pass
+
 from utility.parser import parse_args
 from utility.batch_test import (
     BATCH_SIZE,
@@ -237,7 +275,9 @@ class Trainer:
                 self.logger.logging(
                     f"[speedup] torch.compile enabled on DAMPS submodule "
                     f"(mode={args.torch_compile_mode}, "
-                    f"dynamic={bool(args.torch_compile_dynamic)})"
+                    f"dynamic={bool(args.torch_compile_dynamic)}); "
+                    f"Inductor errors will fall back to eager via "
+                    f"torch._dynamo.config.suppress_errors=True"
                 )
             except Exception as exc:                        # pragma: no cover
                 self.logger.logging(
