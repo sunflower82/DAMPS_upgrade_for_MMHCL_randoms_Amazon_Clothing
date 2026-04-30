@@ -88,6 +88,63 @@ except Exception:
     # is already a no-op so there is nothing to suppress.
     pass
 
+
+def _inductor_complex_backward_supported() -> bool:
+    """
+    Probe whether ``torch.compile``'s Inductor BACKWARD compiler can lower
+    a region that operates on complex tensors (rFFT -> ops -> iRFFT).
+
+    On affected PyTorch builds the backward compile crashes in
+    ``torch/_inductor/ir.py::add_alias`` with::
+
+        torch._inductor.exc.InductorError:
+            AttributeError: 'complex' object has no attribute 'get_name'
+
+    The crash is raised from inside ``loss.backward()``'s
+    ``_backward_impl`` -> ``aot_config.bw_compiler`` chain and is **not**
+    caught by ``torch._dynamo.config.suppress_errors`` -- that flag only
+    covers Dynamo forward graph-capture errors, not AOT-autograd backward
+    compilation errors. Once Inductor decides to lower an FFT subgraph
+    that triggers this bug it will fire on every training step.
+
+    We therefore probe end-to-end (forward + backward through a tiny
+    ``rFFT -> *2.0 -> iRFFT`` pipeline) at startup. If the probe fails we
+    skip the ``torch.compile`` wrap on the DAMPS submodule entirely and
+    run it in eager mode. If the probe succeeds (e.g. a future PyTorch
+    where the bug is fixed, or a non-Windows build) the wrap is applied
+    as usual and the speedup is preserved.
+
+    The probe runs on CPU, takes ~1-3 s, and is invoked once per
+    ``train.py`` subprocess.
+    """
+    if not hasattr(torch, "compile"):
+        return False
+    try:
+        # The bug fires specifically when a Python ``complex`` literal (e.g.
+        # ``1j``) leaks into Inductor's ``add_alias`` via something like
+        # ``torch.exp(1j * theta)`` -- which is exactly what DAMPS's APC
+        # phase rotation does in ``damps/core.py::_apply_apc``::
+        #     rot = torch.exp(-1j * (theta/2 + psi))   # complex tensor
+        #     z   = z * rot                             # complex * complex
+        # The probe replicates this idiom so it accurately predicts whether
+        # the real DAMPS forward+backward will compile on this build.
+        def _probe(v: torch.Tensor) -> torch.Tensor:
+            z = torch.fft.rfft(v, dim=-1, norm="ortho")
+            phi = v[..., : z.shape[-1]]
+            rot = torch.exp(1j * phi)
+            return torch.fft.irfft(z * rot, n=8, dim=-1, norm="ortho")
+
+        compiled = torch.compile(_probe, mode="reduce-overhead", dynamic=True)
+        x = torch.randn(4, 8, requires_grad=True)
+        compiled(x).sum().backward()
+        return True
+    except Exception:
+        return False
+
+
+_INDUCTOR_COMPLEX_BACKWARD_OK: bool = _inductor_complex_backward_supported()
+
+
 from utility.parser import parse_args
 from utility.batch_test import (
     BATCH_SIZE,
@@ -265,25 +322,39 @@ class Trainer:
         # (sparse tensor with changing nnz), which would trigger expensive
         # recompilations. The DAMPS submodule has fixed input/output shapes
         # so it is safe to compile with dynamic=True.
+        #
+        # Gate on _INDUCTOR_COMPLEX_BACKWARD_OK: on PyTorch builds where
+        # Inductor's backward compiler crashes on complex-FFT regions
+        # (the 'complex' object has no attribute 'get_name' bug), wrapping
+        # DAMPS would kill every training step at .backward(). The probe
+        # detects that condition at startup and we skip the wrap to keep
+        # DAMPS in eager mode (correct, just no compile speedup).
         if bool(args.use_torch_compile) and hasattr(torch, "compile"):
-            try:
-                self.model.damps = torch.compile(           # type: ignore[assignment]
-                    self.model.damps,
-                    mode=str(args.torch_compile_mode),
-                    dynamic=bool(args.torch_compile_dynamic),
-                )
+            if not _INDUCTOR_COMPLEX_BACKWARD_OK:
                 self.logger.logging(
-                    f"[speedup] torch.compile enabled on DAMPS submodule "
-                    f"(mode={args.torch_compile_mode}, "
-                    f"dynamic={bool(args.torch_compile_dynamic)}); "
-                    f"Inductor errors will fall back to eager via "
-                    f"torch._dynamo.config.suppress_errors=True"
+                    "[speedup] torch.compile requested but this PyTorch "
+                    "build's Inductor BACKWARD compiler cannot lower DAMPS's "
+                    "complex FFT region (probe failed: 'complex' object has "
+                    "no attribute 'get_name'). Skipping the wrap and running "
+                    "DAMPS in eager mode."
                 )
-            except Exception as exc:                        # pragma: no cover
-                self.logger.logging(
-                    f"[speedup] torch.compile failed to attach: {exc}; "
-                    f"continuing in eager mode."
-                )
+            else:
+                try:
+                    self.model.damps = torch.compile(           # type: ignore[assignment]
+                        self.model.damps,
+                        mode=str(args.torch_compile_mode),
+                        dynamic=bool(args.torch_compile_dynamic),
+                    )
+                    self.logger.logging(
+                        f"[speedup] torch.compile enabled on DAMPS submodule "
+                        f"(mode={args.torch_compile_mode}, "
+                        f"dynamic={bool(args.torch_compile_dynamic)})"
+                    )
+                except Exception as exc:                        # pragma: no cover
+                    self.logger.logging(
+                        f"[speedup] torch.compile failed to attach: {exc}; "
+                        f"continuing in eager mode."
+                    )
 
         # ---------------- W&B (optional) ----------------
         self.wandb: Any = None
