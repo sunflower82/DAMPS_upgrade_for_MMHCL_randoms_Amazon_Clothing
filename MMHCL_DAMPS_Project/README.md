@@ -222,9 +222,59 @@ When `--use_wandb 1`, the same metrics stream to your W&B run for cross-experime
 
 Per §4 of the spec, every reported headline result must be averaged across **10 seeds** with **95 % confidence intervals** and **paired t-tests** versus the MMHCL baseline. The training script accepts `--seed` as a CLI flag; loop over your seed list and aggregate the per-run summaries written to `../<dataset>/MM/sum_<ablation_target>.txt`.
 
+A reusable helper for the paired t-test ships at `scripts/paired_ttest.py`:
+
+```bash
+python scripts/paired_ttest.py \
+    --damps damps_seeds.csv \
+    --baseline mmhcl_seeds.csv \
+    --column recall@20
+```
+
+The script wraps `scipy.stats.ttest_rel` (the *correct* paired test — `ttest_ind` would be wrong because the seeds are paired across methods) and additionally prints a 95 % confidence interval on the mean of the paired differences.
+
 ---
 
-## 8. Citation
+## 8. Training Speedup Toggles
+
+The following accelerations are documented in the project's *Training Speedup Guide*. Each one is **opt-in** via a CLI flag so the locked Revision 9 architecture remains the default.
+
+| Toggle | Default | Speedup | Where it lives |
+| ------ | ------- | ------- | -------------- |
+| `--use_amp 1`              | on  | -30 / -40 % wall-clock (bfloat16, no GradScaler) | `train.py` |
+| `--use_torch_compile 1`    | off | +25-35 % on the DAMPS forward path                | `train.py::Trainer.__init__` |
+| `--torch_compile_mode`     | `reduce-overhead` | tunes `torch.compile` aggression | speedup guide §4 |
+| `--faiss_use_gpu 1`        | on (when N >= `faiss_threshold`) | 5-10x vs CPU FAISS | `damps/graph.py::DualPathKNN._build_faiss` |
+| `--knn_efsearch 64`        | 64 | controls HNSW recall/speed trade-off | `damps/graph.py` |
+
+`torch.compile` is intentionally applied **only** to the DAMPS submodule. Compiling the full forward path would force recompilation every Pattern B' rebuild, because the sparse `Item_mat` shape changes when the K-NN graph is regenerated. The DAMPS submodule has fixed input/output shapes so compilation is safe with `dynamic=True`.
+
+### Hyperparameter optimisation
+
+Two ready-to-run BOHB harnesses are provided. Both anchor the architecture per §4 of the spec and search only `K` (`--topk`) and the IMCF residual coefficient `lambda_coh`:
+
+```bash
+# Optuna TPE + HyperbandPruner (50 trials, headless)
+python scripts/run_optuna_hpo.py --dataset Clothing --n_trials 50
+
+# Weights & Biases Bayesian sweep (parallelisable across GPUs)
+python scripts/run_wandb_sweep.py --action create
+python scripts/run_wandb_sweep.py --action run --sweep <returned_id> --count 50
+```
+
+Hyperband typically prunes 60-70 % of unpromising trials, shrinking the total wall-clock cost from ~7-8 days down to 2-3 days for the recommended 50-trial budget.
+
+### Smoke test
+
+A tiny end-to-end CPU smoke test (~5 s) exercises every speedup toggle, including a `torch.compile` regression check:
+
+```bash
+python tests/smoke_test.py
+```
+
+---
+
+## 9. Citation
 
 If this implementation contributes to your research, please cite the original MMHCL paper and reference this DAMPS extension (the architecture revision PDF in the repository root).
 
