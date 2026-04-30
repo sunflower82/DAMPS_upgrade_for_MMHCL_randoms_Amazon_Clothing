@@ -1,0 +1,418 @@
+"""
+utility/load_data.py — Data Loading & Graph Construction
+==========================================================
+
+Compatible drop-in replacement for the original
+``codes/utility/load_data.py``.
+
+Responsibilities
+----------------
+1.  Read train / val / test JSON splits.
+2.  Build the sparse user-item interaction matrix R.
+3.  Construct three graph structures used by the MMHCL backbone:
+    *   ``UI_mat``    — user-item bipartite graph (sym normalised).
+    *   ``User_mat``  — user-user co-interaction graph (random-walk normalised).
+    *   ``Item_mat``  — item-item multi-modal hypergraph (sym normalised).
+4.  **NEW (DAMPS)**: expose raw image / text / [audio] features so that
+    the DAMPS spectral calibrator can use them at every forward pass and
+    the data-driven AVRF prior can be derived once at model construction
+    time.
+5.  Provide BPR sampling.
+
+Expected dataset layout
+-----------------------
+::
+
+    data/<dataset>/
+        5-core/
+            train.json, val.json, test.json
+        image_feat.npy            # (n_items, image_dim)  e.g. 4096
+        text_feat.npy             # (n_items, text_dim)   e.g. 768
+        audio_feat.npy            # (n_items, audio_dim)  Tiktok only
+        meta_categories.npy       # (n_items,) int  *optional*
+                                   # Static metadata category for APC
+
+If ``meta_categories.npy`` is missing we fall back to a deterministic hash
+of the item IDs so APC still has a clustering signal (still no k-means).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import random as rd
+from time import time
+from typing import Optional
+
+import numpy as np
+import numpy.typing as npt
+import scipy.sparse as sp
+import torch
+
+from utility.parser import parse_args
+
+
+args = parse_args()
+
+
+def _torch_load(path: str):
+    """Compatibility wrapper for torch.load (forces weights_only=False)."""
+    return torch.load(path, weights_only=False)
+
+
+# ---------------------------------------------------------------------------
+#  Data class
+# ---------------------------------------------------------------------------
+class Data:
+    """
+    Loads a recommendation dataset and builds all required adjacency matrices.
+
+    Attributes (post-init):
+        n_users, n_items, n_train, n_test, n_val
+        R          : sp.dok_matrix — (n_users, n_items) binary interactions
+        train_items, test_set, val_set : per-user item lists
+        exist_users : training users with >= 1 interaction
+        meta_categories : (n_items,) Long — static metadata clusters for APC
+        image_feats, text_feats, audio_feats : raw modality tensors (or None)
+    """
+
+    def __init__(self, path: str, batch_size: int) -> None:
+        # ------------------------------------------------------------------
+        # 1. Resolve file paths
+        # ------------------------------------------------------------------
+        self.dataset: str = args.dataset
+        self.path: str = os.path.join(path, f"{args.core}-core")
+        self.batch_size: int = batch_size
+
+        train_file = os.path.join(self.path, "train.json")
+        val_file = os.path.join(self.path, "val.json")
+        test_file = os.path.join(self.path, "test.json")
+
+        # ------------------------------------------------------------------
+        # 2. Read JSON splits
+        # ------------------------------------------------------------------
+        with open(train_file, "r", encoding="utf-8") as f:
+            train = json.load(f)
+        with open(test_file, "r", encoding="utf-8") as f:
+            test = json.load(f)
+        with open(val_file, "r", encoding="utf-8") as f:
+            val = json.load(f)
+
+        self.n_users: int = 0
+        self.n_items: int = 0
+        self.n_train: int = 0
+        self.n_test: int = 0
+        self.n_val: int = 0
+        self.exist_users: list[int] = []
+        self.neg_pools: dict[int, list[int]] = {}
+
+        # Scan training data
+        for uid_str, items in train.items():
+            if not items:
+                continue
+            uid = int(uid_str)
+            self.exist_users.append(uid)
+            self.n_items = max(self.n_items, max(items))
+            self.n_users = max(self.n_users, uid)
+            self.n_train += len(items)
+
+        # Scan test/val data
+        for uid_str, items in test.items():
+            try:
+                if items:
+                    self.n_items = max(self.n_items, max(items))
+                    self.n_test += len(items)
+            except Exception:
+                continue
+        for uid_str, items in val.items():
+            try:
+                if items:
+                    self.n_items = max(self.n_items, max(items))
+                    self.n_val += len(items)
+            except Exception:
+                continue
+
+        self.n_items += 1
+        self.n_users += 1
+        self.print_statistics()
+
+        # ------------------------------------------------------------------
+        # 3. Build the binary user-item interaction matrix R
+        # ------------------------------------------------------------------
+        self.R: sp.dok_matrix = sp.dok_matrix(
+            (self.n_users, self.n_items), dtype=np.float32
+        )
+        self.train_items: dict[int, list[int]] = {}
+        self.test_set: dict[int, list[int]] = {}
+        self.val_set: dict[int, list[int]] = {}
+
+        for uid_str, train_items_list in train.items():
+            if not train_items_list:
+                continue
+            uid = int(uid_str)
+            for i in train_items_list:
+                self.R[uid, i] = 1.0
+            self.train_items[uid] = train_items_list
+
+        for uid_str, lst in test.items():
+            if lst:
+                self.test_set[int(uid_str)] = lst
+        for uid_str, lst in val.items():
+            if lst:
+                self.val_set[int(uid_str)] = lst
+
+        # ------------------------------------------------------------------
+        # 4. Load raw modality features (used by DAMPS + cached I2I builds)
+        # ------------------------------------------------------------------
+        self.image_feats: Optional[torch.Tensor] = self._load_modality("image")
+        self.text_feats: Optional[torch.Tensor] = self._load_modality("text")
+        self.audio_feats: Optional[torch.Tensor] = (
+            self._load_modality("audio") if self.dataset.lower() == "tiktok" else None
+        )
+
+        # ------------------------------------------------------------------
+        # 5. Load (or fabricate) static metadata categories for APC
+        # ------------------------------------------------------------------
+        self.meta_categories: torch.Tensor = self._load_metadata_categories()
+
+    # ==================================================================
+    #  Stats
+    # ==================================================================
+    def print_statistics(self) -> None:
+        print(f"n_users={self.n_users}, n_items={self.n_items}")
+        print(f"n_interactions={self.n_train + self.n_test}")
+        if self.n_users * self.n_items:
+            sparsity = (self.n_train + self.n_test) / (self.n_users * self.n_items)
+        else:
+            sparsity = 0.0
+        print(
+            f"n_train={self.n_train}, n_test={self.n_test}, sparsity={sparsity:.5f}"
+        )
+
+    # ==================================================================
+    #  Modality loaders
+    # ==================================================================
+    def _load_modality(self, name: str) -> Optional[torch.Tensor]:
+        """Load <dataset>/<name>_feat.npy if present, else return None."""
+        candidate_paths = [
+            os.path.join(args.data_path, args.dataset, f"{name}_feat.npy"),
+            os.path.join(args.data_path, args.dataset, f"{name}_feat.pt"),
+        ]
+        for fp in candidate_paths:
+            if not os.path.exists(fp):
+                continue
+            try:
+                if fp.endswith(".npy"):
+                    arr = np.load(fp)
+                    return torch.tensor(arr).float()
+                return _torch_load(fp).float()
+            except Exception as exc:                              # pragma: no cover
+                print(f"[load_data] failed to load {fp}: {exc}")
+                continue
+        print(f"[load_data] modality '{name}' not found — DAMPS will skip it")
+        return None
+
+    def _load_metadata_categories(self) -> torch.Tensor:
+        """
+        Load static metadata categories used by Metadata-Aware APC.
+
+        Falls back to a deterministic hash if no file is present so the
+        ``num_categories`` parameter is still meaningful.
+        """
+        n_cats = max(1, int(args.damps_num_categories))
+        cand = os.path.join(args.data_path, args.dataset, "meta_categories.npy")
+        if os.path.exists(cand):
+            try:
+                arr = np.load(cand).astype(np.int64)
+                if arr.shape[0] != self.n_items:
+                    print(
+                        f"[load_data] meta_categories shape {arr.shape} "
+                        f"does not match n_items={self.n_items} — falling back"
+                    )
+                else:
+                    return torch.from_numpy(np.clip(arr, 0, n_cats - 1)).long()
+            except Exception as exc:                              # pragma: no cover
+                print(f"[load_data] failed to load meta_categories: {exc}")
+
+        # Deterministic fallback: hash item index into n_cats buckets
+        ids = torch.arange(self.n_items, dtype=torch.long)
+        return (ids * 2654435761 % n_cats).long()
+
+    # ==================================================================
+    #  BPR Sampling
+    # ==================================================================
+    def sample(self) -> tuple[list[int], list[int], list[int]]:
+        """Sample a batch of (user, pos_item, neg_item) triplets."""
+        if self.batch_size <= len(self.exist_users):
+            users = rd.sample(self.exist_users, self.batch_size)
+        else:
+            users = [rd.choice(self.exist_users) for _ in range(self.batch_size)]
+
+        pos_items: list[int] = []
+        neg_items: list[int] = []
+
+        for u in users:
+            pos_items.append(self._sample_pos(u))
+            neg_items.append(self._sample_neg(u))
+        return users, pos_items, neg_items
+
+    def _sample_pos(self, u: int) -> int:
+        items = self.train_items[u]
+        return items[np.random.randint(0, len(items))]
+
+    def _sample_neg(self, u: int) -> int:
+        seen = set(self.train_items[u])
+        while True:
+            cand = int(np.random.randint(0, self.n_items))
+            if cand not in seen:
+                return cand
+
+    # ==================================================================
+    #  Sparse helpers
+    # ==================================================================
+    def sparse_mx_to_torch_sparse_tensor(self, sparse_mx: sp.spmatrix) -> torch.Tensor:
+        sparse_mx = sparse_mx.tocoo().astype(np.float32)
+        idx = torch.from_numpy(
+            np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64)
+        )
+        vals = torch.from_numpy(sparse_mx.data)
+        return torch.sparse_coo_tensor(idx, vals, torch.Size(sparse_mx.shape))
+
+    # ==================================================================
+    #  Adjacency normalisation (dense)
+    # ==================================================================
+    @staticmethod
+    def norm_dense(adj: torch.Tensor, normalization: str = "origin") -> torch.Tensor:
+        if normalization == "sym":
+            rowsum = torch.sum(adj, -1)
+            d_inv_sqrt = torch.pow(rowsum, -0.5)
+            d_inv_sqrt[torch.isinf(d_inv_sqrt)] = 0.0
+            d_mat = torch.diagflat(d_inv_sqrt)
+            return torch.mm(torch.mm(d_mat, adj), d_mat)
+        if normalization == "2sym":
+            rowsum = torch.sum(adj, -1)
+            d_row = torch.pow(rowsum, -0.5)
+            d_row[torch.isinf(d_row)] = 0.0
+            d_row_mat = torch.diagflat(d_row)
+            colsum = torch.sum(adj, -2)
+            d_col = torch.pow(colsum, -0.5)
+            d_col[torch.isinf(d_col)] = 0.0
+            d_col_mat = torch.diagflat(d_col)
+            return torch.mm(torch.mm(d_row_mat, adj), d_col_mat)
+        if normalization == "rw":
+            rowsum = torch.sum(adj, -1)
+            d_inv = torch.pow(rowsum, -1)
+            d_inv[torch.isinf(d_inv)] = 0.0
+            d_mat = torch.diagflat(d_inv)
+            return torch.mm(d_mat, adj)
+        return adj
+
+    # ==================================================================
+    #  Graph builders (cached on disk under <path>)
+    # ==================================================================
+    def get_UI_mat(self, norm_type: str = "sym") -> torch.Tensor:
+        cache = os.path.join(self.path, f"UI_mat_{norm_type}.pth")
+        try:
+            return _torch_load(cache)
+        except Exception:
+            pass
+
+        adj_lil = sp.dok_matrix(
+            (self.n_users + self.n_items, self.n_users + self.n_items),
+            dtype=np.float32,
+        ).tolil()
+        R = self.R.tolil()
+        adj_lil[: self.n_users, self.n_users :] = R
+        adj_lil[self.n_users :, : self.n_users] = R.T
+        dense = torch.from_numpy(np.asarray(adj_lil.todense())).float()
+        dense = self.norm_dense(dense, norm_type)
+        sparse_t = dense.to_sparse()
+        torch.save(sparse_t, cache)
+        return sparse_t
+
+    def get_U2U_mat(self, norm_type: str = "rw") -> torch.Tensor:
+        cache = os.path.join(self.path, f"User_mat_{norm_type}.pth")
+        try:
+            return _torch_load(cache)
+        except Exception:
+            pass
+
+        R = torch.from_numpy(np.asarray(self.R.todense())).float()
+        user_mat = R @ R.T
+        n_user = user_mat.size(0)
+        mask = torch.eye(n_user)
+        user_mat[mask > 0] = 0.0
+        user_mat = self.norm_dense(user_mat, norm_type)
+        sparse_t = user_mat.to_sparse()
+        torch.save(sparse_t, cache)
+        return sparse_t
+
+    # ------------------------------------------------------------------
+    #  Item-Item multi-modal hypergraph helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def build_sim(context: torch.Tensor) -> torch.Tensor:
+        """Cosine similarity matrix from a feature matrix."""
+        norm = torch.norm(context, p=2, dim=-1, keepdim=True).clamp_min(1e-12)
+        ctx = context / norm
+        return torch.mm(ctx, ctx.transpose(0, 1))
+
+    @staticmethod
+    def build_knn_normalized_graph(adj: torch.Tensor, topk: int) -> torch.Tensor:
+        """K-NN sparsification: keep top-K per row, binarise."""
+        _, knn_ind = torch.topk(adj, topk, dim=-1)
+        out = torch.zeros_like(adj)
+        out.scatter_(-1, knn_ind, 1.0)
+        return out
+
+    def build_static_hypergraph(
+        self,
+        norm_type: str = "sym",
+        topk: Optional[int] = None,
+    ) -> torch.Tensor:
+        """
+        Build the **static** multi-modal hypergraph (raw features → K-NN →
+        H @ H^T → normalise). Used as the "bootstrap" hypergraph during the
+        warm-up phase before Pattern B' takes over.
+
+        Cached at ``<path>/hypergraph_mat_mul_<norm>_topk_<K>.pth``.
+        """
+        if topk is None:
+            topk = args.topk
+        cache = os.path.join(
+            self.path, f"hypergraph_mat_mul_{norm_type}_topk_{topk}.pth"
+        )
+        try:
+            return _torch_load(cache)
+        except Exception:
+            pass
+
+        modalities: list[torch.Tensor] = []
+        if self.image_feats is not None:
+            adj = self.build_knn_normalized_graph(
+                self.build_sim(self.image_feats), topk=topk
+            )
+            modalities.append(adj)
+        if self.text_feats is not None:
+            adj = self.build_knn_normalized_graph(
+                self.build_sim(self.text_feats), topk=topk
+            )
+            modalities.append(adj)
+        if self.audio_feats is not None:
+            adj = self.build_knn_normalized_graph(
+                self.build_sim(self.audio_feats), topk=topk
+            )
+            modalities.append(adj)
+
+        if not modalities:
+            raise RuntimeError(
+                "No modality features found — at least one of image/text/audio "
+                "_feat.npy must exist for DAMPS-MMHCL"
+            )
+
+        H = torch.cat(modalities, dim=1)            # (N, m * N)
+        adj = H @ H.transpose(0, 1)
+        adj = self.norm_dense(adj, norm_type)
+        sparse_t = adj.to_sparse()
+        torch.save(sparse_t, cache)
+        return sparse_t

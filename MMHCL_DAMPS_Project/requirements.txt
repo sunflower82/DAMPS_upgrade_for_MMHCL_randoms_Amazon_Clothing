@@ -1,0 +1,19 @@
+# Core deep-learning stack
+torch>=2.1.0
+numpy>=1.21.0
+scipy>=1.9.0
+scikit-learn>=1.0.0
+
+# Progress / utility
+tqdm>=4.65.0
+
+# OPTIONAL — enables the FAISS GPU fallback path (auto-activated when N >= 60k).
+# If FAISS is unavailable, DAMPS-MMHCL falls back to the pure PyTorch chunked
+# K-NN builder. CPU-only systems should install `faiss-cpu` instead.
+# faiss-gpu>=1.7.4
+
+# OPTIONAL — Weights & Biases experiment tracking (--use_wandb 1)
+# wandb>=0.15.0
+
+# OPTIONAL — Bayesian Hyperparameter Optimisation (Section 4 of the spec)
+# optuna>=3.2.0
