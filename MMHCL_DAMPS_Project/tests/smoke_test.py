@@ -196,6 +196,49 @@ def smoke_full_model() -> None:
     _print_ok(f"diag: {diag}")
 
 
+def smoke_cuda_construction() -> None:
+    """
+    Regression check for the trainer's construction order: ``train.py`` moves
+    raw modality features to a CUDA device *before* instantiating the model,
+    and the data-driven AVRF prior is then computed inside ``__init__`` --
+    long before the outer ``.to(device)`` call has had a chance to move the
+    freshly-built ``nn.Linear`` projections. We ensure the model auto-aligns
+    its projection MLPs to the input features' device so this exact path
+    cannot regress.
+    """
+    print("== DAMPS_MMHCL CUDA-construction regression ==")
+    if not torch.cuda.is_available():
+        _print_ok("CUDA not available; skipping")
+        return
+
+    from model import DAMPS_MMHCL
+
+    n_users, n_items, d = 16, 32, 64
+    device = torch.device("cuda:0")
+    image_feats = torch.randn(n_items, 256, device=device)
+    text_feats = torch.randn(n_items, 128, device=device)
+
+    # This call previously raised "Expected all tensors to be on the same
+    # device" because self.image_proj was CPU while image_feats was CUDA.
+    model = DAMPS_MMHCL(
+        n_users=n_users,
+        n_items=n_items,
+        embedding_dim=d,
+        image_feats=image_feats,
+        text_feats=text_feats,
+        cf_model="LightGCN",
+        ui_layers=2,
+        user_layers=1,
+        item_layers=1,
+        warmup_epochs=2,
+        data_driven_prior=True,
+    ).to(device)
+
+    assert next(model.image_proj.parameters()).device.type == "cuda"
+    assert next(model.text_proj.parameters()).device.type == "cuda"
+    _print_ok("constructed with CUDA inputs; projection MLPs auto-aligned")
+
+
 def smoke_torch_compile() -> None:
     """
     Speedup Guide S4: ``torch.compile`` on the DAMPS submodule. We do not
@@ -256,5 +299,6 @@ if __name__ == "__main__":
     smoke_knn()
     smoke_prior()
     smoke_full_model()
+    smoke_cuda_construction()
     smoke_torch_compile()
     print("\nAll smoke tests passed!")

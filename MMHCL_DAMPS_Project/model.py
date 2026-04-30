@@ -237,6 +237,20 @@ class DAMPS_MMHCL(nn.Module):
         if data_driven_prior:
             # Project raw features to d=64 before computing the prior so the
             # spectral statistics match the actual DAMPS input distribution.
+            #
+            # Device alignment: ``image_feats`` / ``text_feats`` may already be
+            # on a CUDA device because the trainer pre-moves them BEFORE
+            # constructing the model (see train.py: feats.to(self.device) ->
+            # DAMPS_MMHCL(...).to(self.device)). The projection MLPs above
+            # were just instantiated with ``nn.Linear`` and live on CPU, so
+            # we must move them to the inputs' device before calling them.
+            # The trainer's outer ``.to(self.device)`` after __init__ is then
+            # a no-op for these submodules.
+            target_device = image_feats.device
+            self.image_proj.to(target_device)
+            self.text_proj.to(target_device)
+            if self.has_audio and self.audio_proj is not None:
+                self.audio_proj.to(target_device)
             with torch.no_grad():
                 proj_img = self.image_proj(image_feats.float())
                 proj_txt = self.text_proj(text_feats.float())
