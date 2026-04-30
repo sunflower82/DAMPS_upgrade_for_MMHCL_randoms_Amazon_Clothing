@@ -56,9 +56,8 @@ log/
 *.xlsx
 *.csv
 
-# --- Jupyter notebook checkpoints ---
+# --- Privacy: Jupyter Notebooks, PDF and LaTeX source documents ---
+*.ipynb
 *.ipynb_checkpoints/
-
-# --- Privacy: PDF and LaTeX source documents ---
 *.pdf
 *.tex
