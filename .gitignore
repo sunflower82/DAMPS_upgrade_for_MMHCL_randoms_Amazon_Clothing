@@ -58,3 +58,7 @@ log/
 
 # --- Jupyter notebook checkpoints ---
 *.ipynb_checkpoints/
+
+# --- Privacy: PDF and LaTeX source documents ---
+*.pdf
+*.tex
