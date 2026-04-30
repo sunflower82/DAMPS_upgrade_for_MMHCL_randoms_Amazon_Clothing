@@ -252,13 +252,27 @@ The companion notebook `Local_Random_seeds_train_mmhcl_clothing_colab_original.i
 
 `torch.compile` is intentionally applied **only** to the DAMPS submodule. Compiling the full forward path would force recompilation every Pattern B' rebuild, because the sparse `Item_mat` shape changes when the K-NN graph is regenerated. The DAMPS submodule has fixed input/output shapes so compilation is safe with `dynamic=True`.
 
-**Inductor + complex FFT backward — automatic eager fallback.** Some PyTorch builds (notably Windows + CUDA) currently have an Inductor backward-compile bug for graphs that flow through complex tensors (rFFT → APC/AVRF/IMCF → iRFFT), which surfaces during `loss.backward()` as
+**Inductor + complex FFT backward — automatic eager fallback.** Some PyTorch builds (notably Windows + CUDA) currently have an Inductor backward-compile bug for graphs that flow through complex tensors (rFFT → APC/AVRF/IMCF → iRFFT), which surfaces inside `loss.backward()` as
 
 ```
 torch._inductor.exc.InductorError: AttributeError: 'complex' object has no attribute 'get_name'
 ```
 
-`train.py` sets `torch._dynamo.config.suppress_errors = True` at startup so Dynamo / AOT-autograd silently fall back to eager mode for the offending subgraph instead of crashing the run. Forward-path Inductor speedups are preserved wherever the compiler does succeed; the FFT backward simply runs in eager. The `[speedup] torch.compile enabled on DAMPS submodule …` log line records that this fallback is active. No user action is required.
+This crash originates in AOT-autograd's `bw_compiler` chain and is **not** caught by `torch._dynamo.config.suppress_errors` (that flag only covers Dynamo forward graph-capture errors). To keep training robust, `train.py` runs a tiny end-to-end probe at startup:
+
+```
+torch.compile(rFFT → ×2 → iRFFT) → forward → backward
+```
+
+If the probe raises, the trainer logs
+
+```
+[speedup] torch.compile requested but this PyTorch build's Inductor BACKWARD
+compiler cannot lower DAMPS's complex FFT region (probe failed …). Skipping
+the wrap and running DAMPS in eager mode.
+```
+
+and runs DAMPS in eager mode (correct, just without compile speedup on this PyTorch build). When PyTorch ships a fix the probe will succeed automatically and the wrap is re-enabled — no notebook or CLI changes required. Users who don't want the probe overhead can pass `--use_torch_compile 0`.
 
 ### Hyperparameter optimisation
 
