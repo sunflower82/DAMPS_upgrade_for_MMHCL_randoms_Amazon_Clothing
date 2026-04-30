@@ -196,17 +196,24 @@ class DAMPS(nn.Module):
 
     def _fft(self, x: torch.Tensor) -> torch.Tensor:
         """
-        1-D real FFT in float32 (regardless of input dtype). Optionally
-        permutes the input for the Permutation-FFT falsification test.
+        1-D orthonormal real FFT in float32 (regardless of input dtype).
+        Optionally permutes the input for the Permutation-FFT falsification
+        test.
+
+        ``norm="ortho"`` (per the Speedup Guide, Section 1) makes the rFFT /
+        irFFT pair an orthonormal transform: every linear in-spectrum
+        operation (APC rotation, AVRF gate, IMCF residual) is invariant
+        under this choice, while the orthonormal scaling slightly improves
+        numerical conditioning at d=64 vs the default backward-only norm.
         """
         x32 = x.to(torch.float32)
         if self.ablations["permutation_fft"]:
             x32 = x32[:, self.permutation_idx]
-        return torch.fft.rfft(x32, dim=-1)
+        return torch.fft.rfft(x32, dim=-1, norm="ortho")
 
     def _ifft(self, z: torch.Tensor, original_dtype: torch.dtype) -> torch.Tensor:
-        """Inverse rFFT, cast back to the input dtype (e.g. bfloat16 under AMP)."""
-        x = torch.fft.irfft(z, n=self.d, dim=-1)
+        """Inverse rFFT (orthonormal), cast back to the input dtype."""
+        x = torch.fft.irfft(z, n=self.d, dim=-1, norm="ortho")
         return x.to(original_dtype)
 
     # ------------------------------------------------------------------

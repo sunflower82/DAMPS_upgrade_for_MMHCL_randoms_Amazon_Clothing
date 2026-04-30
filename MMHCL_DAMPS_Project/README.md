@@ -242,10 +242,13 @@ The following accelerations are documented in the project's *Training Speedup Gu
 | Toggle | Default | Speedup | Where it lives |
 | ------ | ------- | ------- | -------------- |
 | `--use_amp 1`              | on  | -30 / -40 % wall-clock (bfloat16, no GradScaler) | `train.py` |
-| `--use_torch_compile 1`    | off | +25-35 % on the DAMPS forward path                | `train.py::Trainer.__init__` |
+| `--use_torch_compile 1`    | off (CLI), **on in notebook** | +25-35 % on the DAMPS forward path | `train.py::Trainer.__init__` |
 | `--torch_compile_mode`     | `reduce-overhead` | tunes `torch.compile` aggression | speedup guide §4 |
 | `--faiss_use_gpu 1`        | on (when N >= `faiss_threshold`) | 5-10x vs CPU FAISS | `damps/graph.py::DualPathKNN._build_faiss` |
 | `--knn_efsearch 64`        | 64 | controls HNSW recall/speed trade-off | `damps/graph.py` |
+| `norm="ortho"` rFFT/irFFT  | always | improved numerical conditioning at d=64 | `damps/core.py::_fft / _ifft` |
+
+The companion notebook `Local_Random_seeds_train_mmhcl_clothing_colab_original.ipynb` (kept off the repository for privacy reasons) wires *all* of the above through to `train.py` and runs the spec-mandated **10 seeds** (Section 4) so the paired t-test report from `scripts/paired_ttest.py` has the statistical power required by the spec.
 
 `torch.compile` is intentionally applied **only** to the DAMPS submodule. Compiling the full forward path would force recompilation every Pattern B' rebuild, because the sparse `Item_mat` shape changes when the K-NN graph is regenerated. The DAMPS submodule has fixed input/output shapes so compilation is safe with `dynamic=True`.
 
