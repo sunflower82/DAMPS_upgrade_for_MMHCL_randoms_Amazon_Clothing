@@ -151,8 +151,17 @@ class DAMPS(nn.Module):
         self.lambda_coh = nn.Parameter(torch.tensor(0.1))
         # Empirical mode 0.2-0.4 on e-commerce datasets (spec Section 2.4).
         self.register_buffer("baseline_asc", torch.tensor(0.3))
-        # Counts how many forward passes have updated baseline_asc — used to
-        # toggle from adaptive EMA (cold-start) to fixed beta=0.99.
+        # Tracks the *current epoch* (set by the trainer via ``set_epoch``)
+        # — used to drive the adaptive EMA schedule
+        # ``beta_t = 1 - 1/(t+1)`` -> 0.99. This MUST be updated per epoch,
+        # not per forward pass (compliance check WARN 3, Revision 9 audit).
+        self.register_buffer(
+            "_current_epoch", torch.zeros(1, dtype=torch.long)
+        )
+        # Legacy counter retained for backward compatibility / diagnostics.
+        # It now reports the cumulative number of training-mode forward
+        # passes that have hit IMCF, which is useful for debug logging but
+        # is **no longer** wired into the EMA schedule.
         self.register_buffer("_imcf_update_count", torch.zeros(1))
 
     # ------------------------------------------------------------------
@@ -344,8 +353,10 @@ class DAMPS(nn.Module):
 
         # Adaptive EMA on baseline_asc: cold-start uses beta_t = 1 - 1/(t+1),
         # then locks at 0.99 (per Section 3.1, identical to AVRF MAD schedule).
+        # ``t`` MUST be the current *epoch* (set by ``set_epoch``), not the
+        # cumulative number of forward passes — see Revision 9 audit WARN 3.
         if self.training:
-            t = float(self._imcf_update_count.item())
+            t = float(self._current_epoch.item())
             if t < self.warmup_epochs:
                 beta_t = 1.0 - 1.0 / (t + 1.0)
             else:
@@ -354,6 +365,7 @@ class DAMPS(nn.Module):
                 self.baseline_asc.mul_(beta_t).add_(
                     asc_per_item.detach().mean() * (1.0 - beta_t)
                 )
+                # Bump the diagnostic-only forward-pass counter.
                 self._imcf_update_count.add_(1.0)
 
         # Residual coefficient — broadcast over F bins
@@ -366,6 +378,25 @@ class DAMPS(nn.Module):
         if z_aud is not None:
             z_aud_out = z_aud + gate * z_aud
         return z_img_out, z_txt_out, z_aud_out
+
+    # ------------------------------------------------------------------
+    #  Epoch hook (drives the IMCF / MAD adaptive EMA schedules)
+    # ------------------------------------------------------------------
+    @torch.no_grad()
+    def set_epoch(self, epoch: int) -> None:
+        """
+        Tell DAMPS which training epoch we are currently on.
+
+        This is the single source of truth for the adaptive EMA schedule
+        ``beta_t = 1 - 1/(t+1)`` -> 0.99 (after ``warmup_epochs``). Without
+        it, the IMCF baseline would be driven by per-forward-pass updates,
+        which on Amazon Clothing (~58 batches/epoch) would saturate
+        ``warmup_epochs=10`` after just one real epoch.
+
+        Args:
+            epoch : 0-indexed epoch counter from the trainer.
+        """
+        self._current_epoch.fill_(int(max(0, epoch)))
 
     # ------------------------------------------------------------------
     #  Per-epoch EMA MAD aggregator (diagnostic)

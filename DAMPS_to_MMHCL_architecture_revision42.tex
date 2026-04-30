@@ -157,6 +157,23 @@ The filter is designed as a Wiener-inspired shrinkage function:
 V^m(\tilde{A}_{I,f}^m) = \frac{\sigma_{inter}^2}{\sigma_{inter}^2 + \sigma_{intra}^2 + \epsilon}
 \end{equation}
 
+\textbf{Learnable Wiener-Gate Parameterisation.}\\
+Rather than recomputing the analytical ratio
+$\sigma_{inter}^2/(\sigma_{inter}^2+\sigma_{intra}^2)$ at every step, we
+parameterise the Wiener gate as a per-frequency-bin learnable scalar
+$V^m_f = 1 + \tanh(w^m_f)$, with the logit $w^m_f$ initialised from a
+data-driven SNR prior (Section 5.2) and strictly clamped to $[-2,\,2]$ at
+construction. The classical Wiener ratio is recovered as the optimum of
+this parameterisation under gradient descent: when
+$\sigma_{intra}^2 \to 0$, the optimal logit saturates near $+2$ giving
+$V^m_f \to 2$ (full pass-through); when $\sigma_{intra}^2 \gg
+\sigma_{inter}^2$, the optimal logit saturates near $-2$ giving
+$V^m_f \to 0$ (full attenuation). The clipped $[-2,\,2]$ logit range maps
+to a gate range of approximately $[0.07,\,1.96]$, which subsumes the
+$[0,\,1]$ Wiener ratio with a safety margin and avoids the
+``cold-start paralysis'' that occurs when an unclipped logit saturates
+\texttt{tanh} and zeros out its own gradient.
+
 \textbf{Initialization Safeguard:} At frequency bins with high SNR, native logit initialization can spike and saturate the \texttt{tanh} function. To rectify this, the parameter is strictly clipped within the [-2.0, 2.0] range, integrated with a \textbf{data-driven automatic prior derivation} algorithm based on the signal-to-noise ratio, replacing hard-coded values. This averts the ``cold-start'' phenomenon and augments adaptability:
 \begin{lstlisting}[language=Python]
 self.AVRF_image = nn.Parameter(
