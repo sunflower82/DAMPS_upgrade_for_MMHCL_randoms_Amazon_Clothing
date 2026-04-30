@@ -1,0 +1,60 @@
+# =============================================================================
+#  DAMPS-MMHCL — Repository ignore rules
+# =============================================================================
+
+# --- macOS / Windows metadata ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Experiment tracking ---
+codes/wandb/
+MMHCL_DAMPS_Project/wandb/
+wandb/
+
+# --- Training artifacts ---
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.npy
+*.npz
+
+# --- Dataset payloads (large, should be downloaded separately) ---
+data/
+
+# --- Per-run training outputs (re-generated each training run) ---
+Clothing/uu_ii=*/
+Clothing/MM/uu_ii=*
+Clothing/multi_seed_summary*
+log/
+
+# --- Spreadsheets / CSV monitoring snapshots ---
+*.xlsx
+*.csv
+
+# --- Jupyter notebook checkpoints ---
+*.ipynb_checkpoints/
