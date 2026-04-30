@@ -54,6 +54,50 @@ from damps import DAMPS, SlimMomentumEncoder, compute_avrf_logit
 
 
 # ===========================================================================
+#  AMP-safe sparse matmul
+# ===========================================================================
+def _safe_sparse_mm(sparse_mat: torch.Tensor, dense: torch.Tensor) -> torch.Tensor:
+    """
+    Autocast-safe wrapper around ``torch.sparse.mm``.
+
+    Background
+    ----------
+    PyTorch's CUDA sparse matmul kernel (``addmm_sparse_cuda``) is currently
+    only implemented for ``float32`` / ``float64``; calling it with a
+    ``BFloat16`` dense operand raises::
+
+        NotImplementedError: "addmm_sparse_cuda" not implemented for 'BFloat16'
+
+    With ``--use_amp 1`` (Speedup Guide Section 3) the surrounding
+    ``torch.autocast(dtype=torch.bfloat16)`` region casts the LightGCN /
+    hypergraph embeddings to bfloat16, which then crashes inside
+    ``torch.sparse.mm``. This helper:
+
+    1. Disables autocast for the matmul (so the result is not re-autocast).
+    2. Promotes both operands to ``float32`` if the dense input is bf16/fp16.
+    3. Runs the sparse mm.
+    4. Casts the result back to the dense input's original dtype, so the
+       caller's pipeline (e.g. residual adds, ``F.normalize``) continues
+       to operate in the autocast dtype as intended.
+
+    The sparse-matrix operands here (``UI_mat``, ``U2U_mat``,
+    ``Item_mat`` / ``I2I_mat``) are tiny relative to the dense embeddings,
+    so the temporary fp32 promotion has negligible memory cost.
+    """
+    orig_dtype = dense.dtype
+    needs_promote = orig_dtype in (torch.bfloat16, torch.float16)
+    # Always disable autocast inside this region so the cast we do is
+    # respected and the result dtype is deterministic.
+    with torch.amp.autocast(device_type=dense.device.type, enabled=False):
+        d = dense.float() if needs_promote else dense
+        s = sparse_mat
+        if needs_promote and s.dtype in (torch.bfloat16, torch.float16):
+            s = s.float()
+        out = torch.sparse.mm(s, d)
+    return out.to(orig_dtype) if needs_promote else out
+
+
+# ===========================================================================
 #  Modality MLP projection head
 # ===========================================================================
 class ModalityProjection(nn.Module):
@@ -464,11 +508,11 @@ class DAMPS_MMHCL(nn.Module):
 
         if self.has_item_branch:
             for _ in range(self.item_layers):
-                ii_emb = torch.sparse.mm(I2I_mat, ii_emb)
+                ii_emb = _safe_sparse_mm(I2I_mat, ii_emb)
 
         if self.has_user_branch:
             for _ in range(self.user_layers):
-                uu_emb = torch.sparse.mm(U2U_mat, uu_emb)
+                uu_emb = _safe_sparse_mm(U2U_mat, uu_emb)
 
         # =====================================================================
         # (E) CF branch — LightGCN / NGCF / MF
@@ -479,7 +523,7 @@ class DAMPS_MMHCL(nn.Module):
             )
             stack = [ego]
             for _ in range(self.ui_layers):
-                ego = torch.sparse.mm(UI_mat, ego)
+                ego = _safe_sparse_mm(UI_mat, ego)
                 stack.append(ego)
             mean = torch.stack(stack, dim=1).mean(dim=1)
             u_ui_emb, i_ui_emb = torch.split(mean, [self.n_users, self.n_items], dim=0)
@@ -489,7 +533,7 @@ class DAMPS_MMHCL(nn.Module):
             )
             stack = [ego]
             for i in range(self.ui_layers):
-                side = torch.sparse.mm(UI_mat, ego)
+                side = _safe_sparse_mm(UI_mat, ego)
                 sum_e = F.leaky_relu(self.GC_Linear_list[i](side))
                 bi_e = F.leaky_relu(
                     self.Bi_Linear_list[i](torch.mul(ego, side))

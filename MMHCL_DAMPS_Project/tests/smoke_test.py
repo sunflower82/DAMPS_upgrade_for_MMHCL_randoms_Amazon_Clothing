@@ -239,6 +239,80 @@ def smoke_cuda_construction() -> None:
     _print_ok("constructed with CUDA inputs; projection MLPs auto-aligned")
 
 
+def smoke_amp_bfloat16_forward() -> None:
+    """
+    Regression check for AMP-safe sparse matmul under bf16 autocast.
+
+    With ``--use_amp 1`` the trainer wraps ``self.model(...)`` in
+    ``torch.autocast(dtype=torch.bfloat16)``. PyTorch's CUDA sparse-matmul
+    kernel (``addmm_sparse_cuda``) is not implemented for bfloat16 -- it
+    raises ``NotImplementedError``. Our ``_safe_sparse_mm`` helper in
+    ``model.py`` works around this by promoting the dense operand to fp32
+    inside a no-autocast region, then casting back. This test executes the
+    exact bf16-autocast forward path on CUDA to make sure that path is
+    intact and never silently regresses.
+    """
+    print("== AMP bfloat16 sparse-mm regression ==")
+    if not torch.cuda.is_available():
+        _print_ok("CUDA not available; skipping")
+        return
+
+    from model import DAMPS_MMHCL
+
+    n_users, n_items, d = 24, 48, 64
+    device = torch.device("cuda:0")
+    image_feats = torch.randn(n_items, 256, device=device)
+    text_feats = torch.randn(n_items, 128, device=device)
+
+    model = DAMPS_MMHCL(
+        n_users=n_users,
+        n_items=n_items,
+        embedding_dim=d,
+        image_feats=image_feats,
+        text_feats=text_feats,
+        cf_model="LightGCN",
+        ui_layers=2,
+        user_layers=1,
+        item_layers=1,
+        warmup_epochs=2,
+        data_driven_prior=True,
+    ).to(device)
+
+    # Build tiny COO sparse matrices on the GPU mimicking the production path
+    def _rand_sparse(rows: int, cols: int, density: float = 0.05) -> torch.Tensor:
+        nnz = max(1, int(rows * cols * density))
+        ri = torch.randint(0, rows, (nnz,), device=device)
+        ci = torch.randint(0, cols, (nnz,), device=device)
+        v = torch.ones(nnz, device=device)
+        return torch.sparse_coo_tensor(
+            torch.stack([ri, ci]), v, (rows, cols)
+        ).coalesce()
+
+    UI_mat = _rand_sparse(n_users + n_items, n_users + n_items)
+    U2U_mat = _rand_sparse(n_users, n_users)
+    I2I_mat = _rand_sparse(n_items, n_items)
+
+    # Forward signature: (UI_mat, I2I_mat, U2U_mat, ...)
+    model.train()
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        out = model(UI_mat, I2I_mat, U2U_mat, epoch=0)
+
+    # Embeddings should come back in a sensible dtype (autocast may keep bf16
+    # for the user/item branch outputs and fp32 for the hypergraph adds via
+    # F.normalize). The key point of this regression test is that the
+    # forward did not raise NotImplementedError on the sparse mm.
+    user_dtype = out["u_ui_emb"].dtype
+    item_dtype = out["i_ui_emb"].dtype
+    for dt in (user_dtype, item_dtype):
+        assert dt in (torch.bfloat16, torch.float16, torch.float32), (
+            f"Unexpected dtype after bf16 autocast forward: {dt}"
+        )
+    _print_ok(
+        "bf16 autocast forward survived sparse mm; "
+        f"u_ui_emb={user_dtype}, i_ui_emb={item_dtype}"
+    )
+
+
 def smoke_torch_compile() -> None:
     """
     Speedup Guide S4: ``torch.compile`` on the DAMPS submodule. We do not
@@ -300,5 +374,6 @@ if __name__ == "__main__":
     smoke_prior()
     smoke_full_model()
     smoke_cuda_construction()
+    smoke_amp_bfloat16_forward()
     smoke_torch_compile()
     print("\nAll smoke tests passed!")
