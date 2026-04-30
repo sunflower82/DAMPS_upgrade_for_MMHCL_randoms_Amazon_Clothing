@@ -75,8 +75,12 @@ def compute_avrf_prior(
     # Cast to float32 to avoid FFT precision loss in bfloat16
     x = features.detach().to(torch.float32)
 
-    # Spectral magnitude per item per frequency bin: |FFT(x_i)|_f
-    z_amp = torch.abs(torch.fft.rfft(x, dim=-1))   # (N, F)
+    # Spectral magnitude per item per frequency bin: |FFT(x_i)|_f.
+    # ``norm="ortho"`` matches the orthonormal rFFT used in damps/core.py
+    # (Speedup Guide Section 1). The Wiener prior below is a ratio of
+    # variances, so the result is invariant to the choice of norm; we use
+    # the orthonormal form for code consistency with the calibrator.
+    z_amp = torch.abs(torch.fft.rfft(x, dim=-1, norm="ortho"))   # (N, F)
 
     # Inter-item variance at each frequency bin (signal energy)
     var_inter = z_amp.var(dim=0, unbiased=False)   # (F,)
