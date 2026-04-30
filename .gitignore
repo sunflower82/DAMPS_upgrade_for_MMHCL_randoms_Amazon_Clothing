@@ -49,6 +49,8 @@ data/
 # --- Per-run training outputs (re-generated each training run) ---
 Clothing/uu_ii=*/
 Clothing/MM/uu_ii=*
+Clothing/damps_uu_ii=*/
+Clothing/MM/damps_uu_ii=*
 Clothing/multi_seed_summary*
 log/
 
