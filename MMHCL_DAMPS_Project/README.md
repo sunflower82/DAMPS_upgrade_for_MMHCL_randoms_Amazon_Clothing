@@ -201,6 +201,24 @@ Every `R`-th epoch the training loop emits two transparency probes mandated by �
 
 When `--use_wandb 1`, the same metrics stream to your W&B run for cross-experiment comparison.
 
+### 5.1 Best-validation reporting
+
+At the end of every run the trainer emits **four** disambiguated summary lines so the values printed to the log file match the maxima of the WandB curves exactly:
+
+```
+BEST_Val_Recall@10:  <max of val/recall@10>
+BEST_Val_Recall@20:  <max of val/recall@20>     ← matches wandb chart max
+BEST_Val_NDCG@10:    <max of val/ndcg@10>       ← needs the new val/ndcg@10 chart
+BEST_Val_NDCG@20:    <max of val/ndcg@20>
+BEST_Test_Recall@20: <test recall at recall-best val epoch>
+BEST_Test_Precision@20: <test precision at recall-best val epoch>
+BEST_Test_NDCG@20:   <test NDCG at ndcg-best val epoch>
+```
+
+The two `BEST_Test_*` lines are pinned to the validation epoch where the *corresponding* validation metric peaked — even if a *later* epoch only improves NDCG (or only improves Recall) and overwrites the running test snapshot. Previously the code overwrote `test_ret` on every improvement of either kind, which meant `BEST_Test_Recall@K` could end up reflecting a non-recall-optimal validation epoch. The refactored tracker fixes this corner case.
+
+The WandB `val` section now also surfaces `val/ndcg@10` (alongside `val/recall@10`, `val/recall@20`, `val/ndcg@20`, `val/precision@20`, `val/hit@20`) so NDCG@10 can be inspected mid-training.
+
 ---
 
 ## 6. Key Engineering Safeguards
