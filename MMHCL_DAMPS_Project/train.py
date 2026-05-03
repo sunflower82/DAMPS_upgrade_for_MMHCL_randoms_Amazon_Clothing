@@ -466,11 +466,29 @@ class Trainer:
             self.wandb.init(**init_kwargs)
 
         n_batch = data_generator.n_train // self.batch_size + 1
-        best_recall: float = 0.0
-        best_ndcg: float = 0.0
+        # ------------------------------------------------------------------
+        # Best-validation tracking
+        # ------------------------------------------------------------------
+        # We track the **two** primary validation metrics independently so that
+        # the final ``BEST_Val_*`` lines emitted to the log file (and to the
+        # ``wandb.summary``) exactly match the maxima of the per-epoch
+        # ``val/recall@K`` and ``val/ndcg@K`` curves on WandB. We also keep the
+        # **test** snapshot captured *at the epoch where each val metric peaked*
+        # so the reported ``BEST_Test_Recall@K`` (resp. ``BEST_Test_NDCG@K``)
+        # is unambiguously the test-set value at the recall-best (resp.
+        # ndcg-best) validation epoch -- not the test result of the *last*
+        # improvement, which would be wrong whenever the final improvement was
+        # ndcg-only or recall-only.
+        # ------------------------------------------------------------------
+        best_val_recall: float = 0.0   # max of val/recall@Ks[-1]
+        best_val_ndcg: float = 0.0     # max of val/ndcg@Ks[-1]
+        best_val_at_recall_peak: Optional[dict[str, Any]] = None
+        best_val_at_ndcg_peak: Optional[dict[str, Any]] = None
+        test_at_recall_peak: Optional[dict[str, Any]] = None
+        test_at_ndcg_peak: Optional[dict[str, Any]] = None
         stopping_step: int = 0
         best_model_state: Optional[dict[str, Any]] = None
-        test_ret: Union[str, dict[str, Any]] = ""
+        test_ret: Union[str, dict[str, Any]] = ""  # last test snapshot (for the run-summary line)
 
         amp_dtype = torch.bfloat16 if self.use_amp else torch.float32
 
@@ -618,10 +636,14 @@ class Trainer:
             )
 
             if self.wandb is not None:
+                # NOTE: ``val/ndcg@{Ks[0]}`` (i.e. NDCG@10) is logged here in
+                # addition to the @20 cut-off so the WandB ``val`` section
+                # surfaces both NDCG charts side by side.
                 self.wandb.log({
                     "epoch": epoch,
                     f"val/recall@{Ks[0]}": val["recall"][0],
                     f"val/recall@{Ks[-1]}": val["recall"][-1],
+                    f"val/ndcg@{Ks[0]}": val["ndcg"][0],
                     f"val/ndcg@{Ks[-1]}": val["ndcg"][-1],
                     f"val/precision@{Ks[-1]}": val["precision"][-1],
                     f"val/hit@{Ks[-1]}": val["hit_ratio"][-1],
@@ -631,29 +653,67 @@ class Trainer:
                 self.reduce_lr_scheduler.step(val["recall"][-1])
 
             # ---------------- Early stopping ----------------
-            improved = (
-                val["recall"][1] > best_recall + args.early_stopping_min_delta
-                or val["ndcg"][1] > best_ndcg + args.early_stopping_min_delta
+            # Improvement criterion: either val_recall@K OR val_ndcg@K must
+            # strictly exceed its running best by at least ``min_delta``. The
+            # patience counter resets on either kind of improvement (matches
+            # the original MMHCL/BM3 behaviour).
+            recall_improved = (
+                val["recall"][1] > best_val_recall + args.early_stopping_min_delta
             )
+            ndcg_improved = (
+                val["ndcg"][1] > best_val_ndcg + args.early_stopping_min_delta
+            )
+            improved = recall_improved or ndcg_improved
             if improved:
-                if val["recall"][1] > best_recall:
-                    best_recall = float(val["recall"][1])
-                if val["ndcg"][1] > best_ndcg:
-                    best_ndcg = float(val["ndcg"][1])
                 test_ret = self.test(users_to_test, is_val=False)
                 self.logger.logging(
                     f"Test_Recall@{Ks[1]}: {test_ret['recall'][1]:.8f}  "
                     f"Test_Precision@{Ks[1]}: {test_ret['precision'][1]:.8f}  "
                     f"Test_NDCG@{Ks[1]}: {test_ret['ndcg'][1]:.8f}"
                 )
+
+                # Snapshot val + test ONLY when val_recall@K hits a new high.
+                # This guarantees that the final BEST_Test_Recall@K is the
+                # test result at the recall-best validation epoch -- even if a
+                # later epoch only improves NDCG and overwrites ``test_ret``.
+                if val["recall"][1] > best_val_recall:
+                    best_val_recall = float(val["recall"][1])
+                    best_val_at_recall_peak = {
+                        "recall": np.array(val["recall"], copy=True),
+                        "ndcg": np.array(val["ndcg"], copy=True),
+                        "precision": np.array(val["precision"], copy=True),
+                        "hit_ratio": np.array(val["hit_ratio"], copy=True),
+                    }
+                    test_at_recall_peak = {
+                        "recall": np.array(test_ret["recall"], copy=True),
+                        "ndcg": np.array(test_ret["ndcg"], copy=True),
+                        "precision": np.array(test_ret["precision"], copy=True),
+                        "hit_ratio": np.array(test_ret["hit_ratio"], copy=True),
+                    }
+                # Same idea for the ndcg-best snapshot.
+                if val["ndcg"][1] > best_val_ndcg:
+                    best_val_ndcg = float(val["ndcg"][1])
+                    best_val_at_ndcg_peak = {
+                        "recall": np.array(val["recall"], copy=True),
+                        "ndcg": np.array(val["ndcg"], copy=True),
+                        "precision": np.array(val["precision"], copy=True),
+                        "hit_ratio": np.array(val["hit_ratio"], copy=True),
+                    }
+                    test_at_ndcg_peak = {
+                        "recall": np.array(test_ret["recall"], copy=True),
+                        "ndcg": np.array(test_ret["ndcg"], copy=True),
+                        "precision": np.array(test_ret["precision"], copy=True),
+                        "hit_ratio": np.array(test_ret["hit_ratio"], copy=True),
+                    }
+
                 if self.wandb is not None:
                     self.wandb.log({
                         "epoch": epoch,
                         f"test/recall@{Ks[-1]}": test_ret["recall"][1],
                         f"test/ndcg@{Ks[-1]}": test_ret["ndcg"][1],
                         f"test/precision@{Ks[-1]}": test_ret["precision"][1],
-                        "best_recall": best_recall,
-                        "best_ndcg": best_ndcg,
+                        "best_recall": best_val_recall,
+                        "best_ndcg": best_val_ndcg,
                     })
                 stopping_step = 0
                 if args.early_stopping_restore_best:
@@ -670,21 +730,68 @@ class Trainer:
                     break
 
         # ---------------- Final summary ----------------
-        if isinstance(test_ret, dict):
+        # The two ``BEST_Val_*`` lines exactly match the maxima of the WandB
+        # ``val/recall@K`` and ``val/ndcg@K`` curves; the ``BEST_Test_*`` lines
+        # are the test-set values captured at those very same epochs (i.e. the
+        # standard convention: pick the model by validation, report on test).
+        if best_val_at_recall_peak is not None:
             self.logger.logging(
-                f"BEST_Test_Recall@{Ks[1]}: {test_ret['recall'][1]:.8f}"
+                f"BEST_Val_Recall@{Ks[0]}: {float(best_val_at_recall_peak['recall'][0]):.8f}"
             )
             self.logger.logging(
-                f"BEST_Test_Precision@{Ks[1]}: {test_ret['precision'][1]:.8f}"
+                f"BEST_Val_Recall@{Ks[1]}: {best_val_recall:.8f}"
+            )
+        if best_val_at_ndcg_peak is not None:
+            self.logger.logging(
+                f"BEST_Val_NDCG@{Ks[0]}: {float(best_val_at_ndcg_peak['ndcg'][0]):.8f}"
             )
             self.logger.logging(
-                f"BEST_Test_NDCG@{Ks[1]}: {test_ret['ndcg'][1]:.8f}"
+                f"BEST_Val_NDCG@{Ks[1]}: {best_val_ndcg:.8f}"
             )
-            if self.wandb is not None:
-                self.wandb.summary[f"best_test_recall@{Ks[-1]}"] = test_ret["recall"][1]
-                self.wandb.summary[f"best_test_precision@{Ks[-1]}"] = test_ret["precision"][1]
-                self.wandb.summary[f"best_test_ndcg@{Ks[-1]}"] = test_ret["ndcg"][1]
 
+        # ``BEST_Test_Recall@K`` is the test-set recall at the epoch where
+        # val_recall@K peaked; ``BEST_Test_NDCG@K`` is the test-set NDCG at
+        # the epoch where val_ndcg@K peaked. The two may come from different
+        # epochs, which is the methodologically clean choice when reporting
+        # multiple test metrics derived from a single validation-selection
+        # criterion per metric.
+        if test_at_recall_peak is not None:
+            self.logger.logging(
+                f"BEST_Test_Recall@{Ks[1]}: {float(test_at_recall_peak['recall'][1]):.8f}"
+            )
+            self.logger.logging(
+                f"BEST_Test_Precision@{Ks[1]}: {float(test_at_recall_peak['precision'][1]):.8f}"
+            )
+        if test_at_ndcg_peak is not None:
+            self.logger.logging(
+                f"BEST_Test_NDCG@{Ks[1]}: {float(test_at_ndcg_peak['ndcg'][1]):.8f}"
+            )
+
+        if self.wandb is not None:
+            if best_val_at_recall_peak is not None:
+                self.wandb.summary[f"best_val_recall@{Ks[0]}"] = float(
+                    best_val_at_recall_peak["recall"][0]
+                )
+                self.wandb.summary[f"best_val_recall@{Ks[-1]}"] = best_val_recall
+            if best_val_at_ndcg_peak is not None:
+                self.wandb.summary[f"best_val_ndcg@{Ks[0]}"] = float(
+                    best_val_at_ndcg_peak["ndcg"][0]
+                )
+                self.wandb.summary[f"best_val_ndcg@{Ks[-1]}"] = best_val_ndcg
+            if test_at_recall_peak is not None:
+                self.wandb.summary[f"best_test_recall@{Ks[-1]}"] = float(
+                    test_at_recall_peak["recall"][1]
+                )
+                self.wandb.summary[f"best_test_precision@{Ks[-1]}"] = float(
+                    test_at_recall_peak["precision"][1]
+                )
+            if test_at_ndcg_peak is not None:
+                self.wandb.summary[f"best_test_ndcg@{Ks[-1]}"] = float(
+                    test_at_ndcg_peak["ndcg"][1]
+                )
+
+        # Keep the legacy ``test_ret`` print so existing log-parsers in the
+        # multi-seed notebook still find a serialisable test-result dict.
         self.logger.logging(str(test_ret))
         self.logger.logging_sum(f"{self.path_name}:{str(test_ret)}")
         if self.wandb is not None:
