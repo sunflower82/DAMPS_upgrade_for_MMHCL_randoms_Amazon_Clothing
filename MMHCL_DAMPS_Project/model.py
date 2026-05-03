@@ -33,8 +33,15 @@ Compared with the original MMHCL the only architectural deltas are:
 1.  An **additional DAMPS pre-pass** before hypergraph propagation.
 2.  A **Soft Residual-Routing** branch that mixes raw + calibrated features
     to evade the double over-smoothing of GCN stacks.
-3.  A **learnable temperature** ``τ`` (Section 3.1) replacing the static
-    InfoNCE temperature in ``batched_contrastive_loss``.
+3.  An InfoNCE temperature ``τ`` that can be either:
+    * **Learnable** (Revision 9 / rev42 baseline; ``τ`` registered as
+      ``nn.Parameter``, initialised at 0.1).
+    * **Static** (Revision 11 / rev44 Phase 1 Quick Win; ``τ`` registered as
+      a non-trainable buffer, anchor value 0.3, sweep set
+      ``{0.2, 0.3, 0.5}``). Empirically the learnable τ's gradient vanishes
+      and gets stuck at ~0.0909 across all 10 seeds, triggering an embedding
+      collapse and a 10.7 % Recall@20 deficit relative to the MMHCL paper.
+      Phase 1 fixes this by pinning τ to 0.3.
 4.  A **Slim Momentum Encoder** that lives outside the autograd graph and
     feeds the Pattern B' rebuild (see ``train.py``).
 
@@ -140,7 +147,17 @@ class DAMPS_MMHCL(nn.Module):
                                 ``cf_model == 'NGCF'``).
         item_loss_ratio       : weight for item-side contrastive loss.
         user_loss_ratio       : weight for user-side contrastive loss.
-        temperature_init      : initial value for the learnable τ.
+        temperature_init      : value for τ. When ``learnable_tau=True`` this
+                                is the initialisation of ``nn.Parameter``; when
+                                ``learnable_tau=False`` it is the fixed anchor
+                                value used throughout training. Phase 1 (rev44)
+                                anchor: 0.3.
+        learnable_tau         : if True, register τ as ``nn.Parameter``
+                                (Revision 9 / rev42 behaviour, default 0.1).
+                                If False, register τ as a non-trainable buffer
+                                (Revision 11 / rev44 Phase 1, anchor 0.3).
+                                The default below is False to match the
+                                rev44 Phase 1 recommended config.
         warmup_epochs         : warm-up window for the EMA schedules.
         damps_num_categories  : number of static metadata clusters.
         data_driven_prior     : if True, derive AVRF priors from raw features.
@@ -162,7 +179,8 @@ class DAMPS_MMHCL(nn.Module):
         weight_size: Optional[list[int]] = None,
         item_loss_ratio: float = 0.07,
         user_loss_ratio: float = 0.03,
-        temperature_init: float = 0.1,
+        temperature_init: float = 0.3,
+        learnable_tau: bool = False,
         warmup_epochs: int = 10,
         damps_num_categories: int = 10,
         data_driven_prior: bool = True,
@@ -342,13 +360,29 @@ class DAMPS_MMHCL(nn.Module):
         )
 
         # ------------------------------------------------------------------
-        # 9. Learnable InfoNCE temperature (Revision 9 spec, Section 3.1).
-        #    Default initialisation = 0.1; can be overridden via the
-        #    ``temperature_init`` constructor argument or the
-        #    ``--temperature`` CLI flag in train.py. Clamped to >= 0.01 in
-        #    ``batched_contrastive_loss`` to prevent division blow-ups.
+        # 9. InfoNCE temperature τ
         # ------------------------------------------------------------------
-        self.tau = nn.Parameter(torch.tensor(float(temperature_init)))
+        # Revision 9 (rev42) made τ a learnable ``nn.Parameter`` initialised
+        # at 0.1. Empirical analysis on Amazon Clothing across 10 seeds shows
+        # the gradient of τ vanishes and the value gets pinned to ~0.0909,
+        # which collapses the embedding space and causes a 10.7 % Recall@20
+        # deficit. Revision 11 (rev44) Phase 1 -- Quick Win -- pivots to a
+        # **static τ sweep** anchored at τ = 0.3 (sweep set {0.2, 0.3, 0.5})
+        # to break the collapse.
+        #
+        # ``learnable_tau`` toggles between the two regimes:
+        #   * True  -> nn.Parameter (rev42 baseline reproduction).
+        #   * False -> register_buffer (rev44 Phase 1 default).
+        #
+        # ``batched_contrastive_loss`` clamps τ to >= 0.01 from below in both
+        # cases to prevent division blow-ups.
+        # ------------------------------------------------------------------
+        self.learnable_tau: bool = bool(learnable_tau)
+        tau_tensor = torch.tensor(float(temperature_init))
+        if self.learnable_tau:
+            self.tau = nn.Parameter(tau_tensor)
+        else:
+            self.register_buffer("tau", tau_tensor)
 
     # ------------------------------------------------------------------
     #  Setters & accessors
@@ -575,15 +609,18 @@ class DAMPS_MMHCL(nn.Module):
         batch_size: int = 4096,
     ) -> torch.Tensor:
         """
-        InfoNCE contrastive loss with a **learnable** temperature τ.
+        InfoNCE contrastive loss with InfoNCE temperature τ.
 
-        τ is clamped at 0.01 from below to prevent division by zero / numerical
-        explosion. This matches the "Learnable InfoNCE Temperature" subsection
-        of the DAMPS spec.
+        τ may be either a learnable ``nn.Parameter`` (rev42 baseline) or a
+        non-trainable buffer (rev44 Phase 1). In both cases it is clamped at
+        0.01 from below to prevent division by zero / numerical explosion.
         """
         device = z1.device
         num_nodes = z1.size(0)
         num_batches = (num_nodes - 1) // batch_size + 1
+        # ``torch.clamp`` works identically on Parameter and buffer; the
+        # latter simply has no autograd hook so the clamped value flows
+        # downstream as a plain scalar tensor.
         tau = torch.clamp(self.tau, min=0.01)
 
         f: Callable[[torch.Tensor], torch.Tensor] = lambda x: torch.exp(x / tau)
@@ -635,6 +672,7 @@ class DAMPS_MMHCL(nn.Module):
             "damps_params": self.damps.num_trainable_params(),
             "tau": float(self.tau.item()),
             "tau_clamped": float(torch.clamp(self.tau, min=0.01).item()),
+            "tau_mode": "learnable" if self.learnable_tau else "static",
             "alpha_img": float(self.alpha_img.item()),
             "alpha_txt": float(self.alpha_txt.item()),
             "alpha_aud": float(self.alpha_aud.item()) if self.has_audio else None,

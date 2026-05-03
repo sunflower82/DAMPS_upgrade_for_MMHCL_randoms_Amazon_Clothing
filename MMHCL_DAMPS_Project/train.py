@@ -180,11 +180,24 @@ def _configure_cufft_cache(device: torch.device) -> None:
 #  Experiment directory
 # ===========================================================================
 def _experiment_paths() -> tuple[str, str, str]:
-    """Build the per-run and aggregated log directories."""
+    """
+    Build the per-run and aggregated log directories.
+
+    The directory name encodes the **rev44 Phase 1 dimensions** explicitly:
+    ``taulearn`` (1 = learnable τ, 0 = static τ) and the τ value, plus the
+    AVRF/APC/IMCF ablation switches. This keeps log files for the four
+    Phase 1 configurations in distinct directories, e.g.::
+
+        damps_..._t=0.1_taulearn=1_R=5_apc=1_avrf=1_imcf=1_..._    # rev42 anchor (a)
+        damps_..._t=0.3_taulearn=0_R=5_apc=1_avrf=1_imcf=1_..._    # variant (b)
+        damps_..._t=0.1_taulearn=1_R=5_apc=1_avrf=0_imcf=1_..._    # variant (c)
+        damps_..._t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_..._    # variant (d) -- Phase 1 default
+    """
     name = (
         f"damps_uu_ii={args.User_layers}_{args.Item_layers}"
         f"_{args.user_loss_ratio}_{args.item_loss_ratio}"
-        f"_topk={args.topk}_t={args.temperature}_R={args.rebuild_R}"
+        f"_topk={args.topk}_t={args.temperature}_taulearn={args.learnable_tau}"
+        f"_R={args.rebuild_R}"
         f"_apc={args.damps_apc}_avrf={args.damps_avrf}_imcf={args.damps_imcf}"
         f"_regs={args.regs}_dim={args.embed_size}_seed={args.seed}_"
         f"{args.ablation_target}"
@@ -277,6 +290,7 @@ class Trainer:
             item_loss_ratio=args.item_loss_ratio,
             user_loss_ratio=args.user_loss_ratio,
             temperature_init=args.temperature,
+            learnable_tau=bool(args.learnable_tau),
             warmup_epochs=args.damps_warmup_epochs,
             damps_num_categories=args.damps_num_categories,
             data_driven_prior=bool(args.damps_data_driven_prior),
@@ -587,7 +601,8 @@ class Trainer:
             diag = self.model.diagnostics()
             if epoch % self.rebuild_R == 0:
                 self.logger.logging(
-                    f"[diag epoch {epoch}] tau={diag['tau_clamped']:.4f}  "
+                    f"[diag epoch {epoch}] tau={diag['tau_clamped']:.4f} "
+                    f"({diag['tau_mode']})  "
                     f"alpha_img={diag['alpha_img']:.4f} "
                     f"alpha_txt={diag['alpha_txt']:.4f}  "
                     f"tanh_sat: img={diag['tanh_sat_img']:.3f} "
@@ -605,6 +620,9 @@ class Trainer:
                     "train/cl_loss": cl_loss,
                     "train/lr": self.optimizer.param_groups[0]["lr"],
                     "diag/tau": diag["tau_clamped"],
+                    # 1.0 if learnable, 0.0 if static -- makes the rev44 Phase 1
+                    # vs rev42 anchor distinction trivially filterable in WandB.
+                    "diag/tau_learnable": float(diag["tau_mode"] == "learnable"),
                     "diag/alpha_img": diag["alpha_img"],
                     "diag/alpha_txt": diag["alpha_txt"],
                     "diag/tanh_sat_img": diag["tanh_sat_img"],

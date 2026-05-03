@@ -1,13 +1,25 @@
 # DAMPS-MMHCL — Spectral Domain Calibration for Multi-Modal Hypergraph Recommendation
 
-**Reference:** *In-Depth Design Analysis Report — Upgrading the MMHCL Multi-Modal Recommendation Framework via Spectral Domain Representation Calibration (DAMPS)*, Revision 9 — 100% Compliance Check & Final Lock.
+**Reference:** *In-Depth Design Analysis Report — Upgrading the MMHCL Multi-Modal Recommendation Framework via Spectral Domain Representation Calibration (DAMPS)*, Revision 11 — Phase 1 (Quick Win) Execution Plan with Quantitative Stop-Gate. Builds on top of the Revision 9 — 100 % Compliance Check & Final Lock baseline.
 
 This repository contains the **production-quality reference implementation** of DAMPS-MMHCL. It is designed to drop directly into the original MMHCL training pipeline while introducing the four core upgrades described in the architecture specification:
 
 1. **DAMPS spectral calibration block** — APC + AVRF + Residual IMCF + Soft Residual-Routing.
 2. **Pattern B' (Scheduled Rebuild)** — recomputes the K-NN multi-modal hypergraph every `R` epochs from a slim momentum buffer.
 3. **Slim Momentum Encoder** — EMA-smooths only the post-DAMPS `d=64` representation (~98 % VRAM saving versus naive MoCo-style momentum).
-4. **Engineering hardening** — `bfloat16` mixed precision, learnable InfoNCE temperature `τ`, data-driven AVRF prior, cuFFT plan-cache lockdown, dual-path K-NN (chunked PyTorch + FAISS HNSW for `N ≥ 60 000`).
+4. **Engineering hardening** — `bfloat16` mixed precision, **static** InfoNCE temperature `τ` (rev44 Phase 1 default — see §6 below), data-driven AVRF prior, cuFFT plan-cache lockdown, dual-path K-NN (chunked PyTorch + FAISS HNSW for `N ≥ 60 000`).
+
+> **Revision 11 / rev44 Phase 1 highlights**
+>
+> Empirical 10-seed analysis on Amazon Clothing showed the rev42/Revision 9 anchor (`Recall@20 = 0.0786 ± 0.0016`, `NDCG@20 = 0.0383 ± 0.0008`) suffers a **10.7 % asymmetric coverage loss** vs. the MMHCL paper. Root cause: the learnable τ's gradient vanishes and τ saturates at ~0.0909, triggering an embedding collapse. The Top-10 concentration signature (`Recall@10 ↔ Recall@20` gap of only ~0.027) independently corroborates the diagnosis.
+>
+> Phase 1 — Quick Win (`< 1 day`) consists of three zero-risk action items:
+>
+> 1. **Audit eval protocol** (`scripts/audit_eval_protocol.py`, 7-point checklist).
+> 2. **Static τ sweep** anchored at τ = 0.3 (sweep set `{0.2, 0.3, 0.5}`); set via `--temperature 0.3 --learnable_tau 0` (now the **default**).
+> 3. **AVRF ablation** — disable AVRF on sparse Clothing to recover useful signal: `--damps_avrf 0` (now the **default**).
+>
+> Stop-gate: Phase 1 is declared successful iff Recall@20 ≥ 0.0870 **AND** NDCG@20 ≥ 0.0390 (10-seed mean) with paired *t*-test `p < 0.05` vs the rev42 anchor. Recall@20 ≥ 0.0900 fully validates the paper contribution.
 
 ---
 
@@ -88,9 +100,12 @@ MMHCL_DAMPS_Project/
 | `damps/momentum.py` | `SlimMomentumEncoder` | §3.1.1 | Slim momentum on `d=64` only |
 | `damps/graph.py` | `DualPathKNN` | §3.2 | Chunked PyTorch (default) + FAISS HNSW fallback |
 | `damps/prior.py` | `compute_avrf_logit` | §2.3 | Data-driven SNR-based prior derivation, strict [-2, 2] clip |
-| `model.py` | `DAMPS_MMHCL` | §1.3 + §3.1 | Full backbone with Soft Residual-Routing + learnable τ |
+| `model.py` | `DAMPS_MMHCL` | §1.3 + §3.1 (+ rev44 §3) | Full backbone with Soft Residual-Routing; τ is **learnable** (rev42, `nn.Parameter`) or **static** (rev44 default, `register_buffer`) |
 | `train.py` | `Trainer.maybe_rebuild_hypergraph` | §3.1 | Pattern B' Scheduled Rebuild every `R` epochs |
 | `train.py` | `_configure_cufft_cache` | §3.3 | Permanently disable cuFFT plan cache |
+| `scripts/audit_eval_protocol.py` | (entry point) | rev44 §4 | 7-point evaluation-protocol audit (see §6 below) |
+| `scripts/run_phase1_ablation.py` | (entry point) | rev44 §4 | Sweep all four Phase 1 configurations × N seeds + Bonferroni-corrected paired t-tests |
+| `scripts/paired_ttest.py` | `paired_ttest_report` | rev44 §4 | Paired *t*-test with optional `--bonferroni N` correction |
 
 ---
 
@@ -129,8 +144,15 @@ If `meta_categories.npy` is missing, `utility/load_data.py` falls back to a dete
 ### 4.3 Train
 
 ```bash
-# Default lock-in (all DAMPS components ON, R = 5, bfloat16 AMP)
+# Default invocation == rev44 / Revision 11 Phase 1 RECOMMENDED config (d):
+#   --temperature 0.3   (anchor of the static τ sweep)
+#   --learnable_tau 0   (τ registered as buffer, not nn.Parameter)
+#   --damps_avrf 0      (AVRF off to preserve sparse Clothing signal)
 python train.py --dataset Clothing --seed 42
+
+# Reproduce the rev42 / Revision 9 baseline anchor (variant (a)):
+python train.py --dataset Clothing --seed 42 \
+    --temperature 0.1 --learnable_tau 1 --damps_avrf 1
 
 # Tiktok with audio modality
 python train.py --dataset Tiktok --seed 42
@@ -141,17 +163,21 @@ python train.py --dataset Sports --rebuild_R 5 --use_wandb 1
 
 ### 4.4 Ablation switchboard
 
-| Flag | What it controls | Default |
-| ---- | ---------------- | ------- |
-| `--damps_apc` | Metadata-Aware APC | 1 (ON) |
-| `--damps_avrf` | AVRF logit-clipped Wiener gate | 1 |
-| `--damps_imcf` | Residual IMCF | 1 |
-| `--damps_permutation_fft` | Permutation-FFT falsifiability test | 0 |
-| `--damps_soft_routing` | Soft Residual-Routing into HGCN | 1 |
-| `--damps_momentum` | Slim Momentum Encoder | 1 |
-| `--damps_data_driven_prior` | SNR-based AVRF prior derivation | 1 |
-| `--rebuild_R` | Pattern B' rebuild frequency (epochs) | 5 |
-| `--use_amp` | bfloat16 mixed precision | 1 |
+| Flag | What it controls | Default | Why |
+| ---- | ---------------- | ------- | --- |
+| `--damps_apc` | Metadata-Aware APC | 1 (ON) | rev42 / rev44 |
+| `--damps_avrf` | AVRF logit-clipped Wiener gate | **0** | rev44 §3 — AVRF over-attenuates sparse Clothing |
+| `--damps_imcf` | Residual IMCF | 1 | rev42 / rev44 |
+| `--damps_permutation_fft` | Permutation-FFT falsifiability test | 0 | rev42 §6 |
+| `--damps_soft_routing` | Soft Residual-Routing into HGCN | 1 | rev42 / rev44 |
+| `--damps_momentum` | Slim Momentum Encoder | 1 | rev42 / rev44 |
+| `--damps_data_driven_prior` | SNR-based AVRF prior derivation | 1 | rev42 |
+| `--temperature` | InfoNCE τ value (or initialisation if learnable) | **0.3** | rev44 §3 — Phase 1 static-τ anchor |
+| `--learnable_tau` | 1 = `nn.Parameter` (rev42), 0 = buffer (rev44) | **0** | rev44 §3 — break τ-saturation collapse |
+| `--rebuild_R` | Pattern B' rebuild frequency (epochs) | 5 | rev42 §3.1 |
+| `--use_amp` | bfloat16 mixed precision | 1 | rev42 §3.3 |
+
+> **Rev44 default change-set:** `--damps_avrf 0`, `--temperature 0.3`, `--learnable_tau 0`. These are the three knobs that define the Phase 1 recommended configuration `(d)` of the four-variant sweep. The directory naming in `_experiment_paths` now also encodes `taulearn={0,1}` so each variant lands in a distinct log folder.
 
 The eight-row defensive ablation table from §6 of the spec maps onto these flags directly:
 
@@ -201,7 +227,66 @@ Every `R`-th epoch the training loop emits two transparency probes mandated by �
 
 When `--use_wandb 1`, the same metrics stream to your W&B run for cross-experiment comparison.
 
-### 5.1 Best-validation reporting
+### 5.1 rev44 / Phase 1 Quick Win — running the four-variant sweep
+
+Section 4 of `DAMPS_to_MMHCL_architecture_revision44.tex` defines four
+configurations to compare across **10 random seeds**:
+
+| Variant | Flags | Hypothesis |
+| ------- | ----- | ---------- |
+| (a) anchor   | `--temperature 0.1 --learnable_tau 1 --damps_avrf 1` | rev42 baseline; *τ* saturates at ~0.0909, embedding collapses |
+| (b) τ-only   | `--temperature 0.3 --learnable_tau 0 --damps_avrf 1` | static τ removes saturation, AVRF kept on |
+| (c) AVRF-off | `--temperature 0.1 --learnable_tau 1 --damps_avrf 0` | AVRF off recovers sparse coverage |
+| (d) combined | `--temperature 0.3 --learnable_tau 0 --damps_avrf 0` | **RECOMMENDED**: union of (b) + (c) — current default |
+
+Step 1 — **audit the eval protocol** (zero cost, blocks the sweep):
+
+```bash
+cd MMHCL_DAMPS_Project
+python scripts/audit_eval_protocol.py --dataset Clothing --data_path ../data/
+```
+
+The script verifies the 7-point checklist from rev44 §4: 5-core threshold,
+split fingerprint, all-ranking vs sampled, NDCG `log2(i+2)` convention, ID
+remap consistency, popularity filtering at test time, and tie-break sort
+stability. The audit must report `PASS` on all seven before Phase 1 may
+proceed.
+
+Step 2 — **run the four-variant sweep across 10 seeds**:
+
+```bash
+python scripts/run_phase1_ablation.py \
+    --dataset Clothing \
+    --seeds 42 43 44 45 46 47 48 49 50 51 \
+    --variants a b c d \
+    --epoch 250 --rebuild_R 5
+```
+
+Add `--aggregate_only` to skip training and just re-aggregate metrics from
+existing per-run logs. The script:
+
+1. Spawns one `train.py` invocation per `(variant, seed)` pair via
+   `subprocess`, inheriting the active Python environment.
+2. Parses `BEST_Test_Recall@20` / `BEST_Test_NDCG@20` from every per-run
+   log file under `../<dataset>/<damps_..._taulearn=*>/`.
+3. Reports the **mean ± std** (10-seed) for each variant.
+4. Runs **Bonferroni-corrected paired t-tests** for variants (b), (c), (d)
+   vs anchor (a) — corrected α = 0.05 / 3 ≈ 0.0167.
+5. Renders the rev44 §5.2 stop-gate verdict per variant:
+   * `Recall@20 ≥ 0.0900` → **PAPER VALIDATED**.
+   * `Recall@20 ≥ 0.0870 ∧ NDCG@20 ≥ 0.0390` → **PHASE 1 PASS**.
+   * Else → **PHASE 1 FAIL** (re-audit eval protocol).
+
+For an *ad-hoc* paired t-test outside the sweep helper:
+
+```bash
+python scripts/paired_ttest.py \
+    --damps    variant_d_recalls.csv \
+    --baseline variant_a_recalls.csv \
+    --bonferroni 3
+```
+
+### 5.2 Best-validation reporting
 
 At the end of every run the trainer emits **four** disambiguated summary lines so the values printed to the log file match the maxima of the WandB curves exactly:
 
@@ -232,7 +317,7 @@ The WandB `val` section now also surfaces `val/ndcg@10` (alongside `val/recall@1
 | Slim Momentum (`d=64`) | `damps/momentum.py::SlimMomentumEncoder` | -98 % auxiliary VRAM vs MoCo. |
 | Pattern B' rebuild | `train.py::maybe_rebuild_hypergraph` | Stable density; no NNZ explosion. |
 | Dual-path K-NN | `damps/graph.py::DualPathKNN` | O(N log N) when `N ≥ 60 000`. |
-| Learnable τ | `model.py::DAMPS_MMHCL.tau` | Prevents InfoNCE saturation post-EMA. |
+| Static τ (rev44 default) | `model.py::DAMPS_MMHCL.tau` | Buffer pinned at 0.3 — breaks the rev42 τ-saturation embedding collapse documented in rev44 §3 (τ stuck at 0.0909, 10.7 % Recall@20 deficit). Toggle back to learnable τ via `--learnable_tau 1`. |
 
 ---
 
@@ -240,12 +325,15 @@ The WandB `val` section now also surfaces `val/ndcg@10` (alongside `val/recall@1
 
 Per §4 of the spec, every reported headline result must be averaged across **10 seeds** with **95 % confidence intervals** and **paired t-tests** versus the MMHCL baseline. The training script accepts `--seed` as a CLI flag; loop over your seed list and aggregate the per-run summaries written to `../<dataset>/MM/sum_<ablation_target>.txt`.
 
+When the rev44 Phase 1 sweep compares **three** variants `(b), (c), (d)` against the same anchor `(a)`, the family-wise α must be Bonferroni-corrected. `scripts/paired_ttest.py` accepts `--bonferroni N` for this; `scripts/run_phase1_ablation.py` plugs in `N = 3` automatically.
+
 A reusable helper for the paired t-test ships at `scripts/paired_ttest.py`:
 
 ```bash
 python scripts/paired_ttest.py \
     --damps damps_seeds.csv \
     --baseline mmhcl_seeds.csv \
+    --bonferroni 3 \
     --column recall@20
 ```
 
