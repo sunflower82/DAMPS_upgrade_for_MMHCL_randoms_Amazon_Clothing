@@ -9,13 +9,32 @@ Compatible with the original MMHCL CLI surface (every flag from
 ``codes/utility/parser.py`` is preserved) plus the new DAMPS-specific
 options listed in Section 3 of the DAMPS spec.
 
+Phase-1 / rev44 / Revision 11 defaults (Quick Win)
+--------------------------------------------------
+* ``--temperature 0.3`` (was 0.1)
+* ``--learnable_tau 0`` (new flag; rev42 used a learnable nn.Parameter, which
+  empirically saturates at ~0.0909 and triggers an embedding collapse).
+* ``--damps_avrf 0`` (was 1; rev44 disables AVRF for Phase 1 to recover
+  Recall@20 coverage on the sparse Amazon Clothing dataset).
+
 Usage examples
 --------------
 ::
 
+    # Default invocation == rev44 Phase 1 recommended config (d):
     python train.py --dataset Clothing --seed 42
-    python train.py --dataset Tiktok --damps_apc 1 --damps_avrf 1 --damps_imcf 1
-    python train.py --dataset Sports --rebuild_R 5 --use_amp 1 --use_wandb 1
+
+    # Reproduce the rev42 / Revision 9 baseline anchor (a):
+    python train.py --dataset Clothing --seed 42 \\
+        --temperature 0.1 --learnable_tau 1 --damps_avrf 1
+
+    # Phase 1 variant (b) -- only the static-tau fix:
+    python train.py --dataset Clothing --seed 42 \\
+        --temperature 0.3 --learnable_tau 0 --damps_avrf 1
+
+    # Phase 1 variant (c) -- only the AVRF-off fix:
+    python train.py --dataset Clothing --seed 42 \\
+        --temperature 0.1 --learnable_tau 1 --damps_avrf 0
 """
 
 from __future__ import annotations
@@ -89,11 +108,21 @@ def parse_args() -> argparse.Namespace:
                         help="Weight for user-side contrastive loss.")
     parser.add_argument("--item_loss_ratio", type=float, default=0.07,
                         help="Weight for item-side contrastive loss.")
-    parser.add_argument("--temperature", type=float, default=0.1,
-                        help="Initialisation value for the *learnable* "
-                             "InfoNCE temperature tau (Revision 9 spec, "
-                             "Section 3.1: tau is an nn.Parameter init at "
-                             "0.1, dynamically clamped to >= 0.01).")
+    parser.add_argument("--temperature", type=float, default=0.3,
+                        help="InfoNCE temperature tau. Default is 0.3 to "
+                             "match the Revision 11 / rev44 Phase 1 anchor "
+                             "(static tau sweep set {0.2, 0.3, 0.5}). To "
+                             "reproduce the Revision 9 / rev42 baseline, "
+                             "pass --learnable_tau 1 --temperature 0.1.")
+    parser.add_argument("--learnable_tau", type=int, default=0,
+                        help="0 = static tau (rev44 Phase 1 default; tau "
+                             "is a non-trainable buffer fixed at "
+                             "--temperature throughout training); "
+                             "1 = learnable tau (rev42 baseline; tau is an "
+                             "nn.Parameter initialised at --temperature, "
+                             "clamped to >= 0.01). Set to 0 to break the "
+                             "tau-saturation embedding-collapse failure mode "
+                             "documented in rev44 Section 3.")
 
     # =====================================================================
     #  Evaluation
@@ -138,8 +167,13 @@ def parse_args() -> argparse.Namespace:
     # =====================================================================
     parser.add_argument("--damps_apc", type=int, default=1,
                         help="1 = enable Metadata-Aware Adaptive Phase Calibration.")
-    parser.add_argument("--damps_avrf", type=int, default=1,
-                        help="1 = enable AVRF (logit-clipped Wiener gate).")
+    parser.add_argument("--damps_avrf", type=int, default=0,
+                        help="0 = AVRF off (rev44 Phase 1 default; preserves "
+                             "sparse signals on Amazon Clothing where AVRF "
+                             "tends to over-attenuate). "
+                             "1 = AVRF on (rev42 baseline; logit-clipped "
+                             "Wiener gate). Phase 1 ablation explicitly sets "
+                             "this to 0 to recover Recall@20 coverage.")
     parser.add_argument("--damps_imcf", type=int, default=1,
                         help="1 = enable Residual Inter-Modal Coherence Filter.")
     parser.add_argument("--damps_permutation_fft", type=int, default=0,
