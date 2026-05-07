@@ -288,21 +288,31 @@ python scripts/paired_ttest.py \
 
 ### 5.2 Best-validation reporting
 
-At the end of every run the trainer emits **four** disambiguated summary lines so the values printed to the log file match the maxima of the WandB curves exactly:
+At the end of every run the trainer emits a disambiguated summary block so the values printed to the per-run text log match the maxima of the WandB curves *and* the values surfaced in `wandb.summary` exactly:
 
 ```
-BEST_Val_Recall@10:  <max of val/recall@10>
-BEST_Val_Recall@20:  <max of val/recall@20>     ← matches wandb chart max
-BEST_Val_NDCG@10:    <max of val/ndcg@10>       ← needs the new val/ndcg@10 chart
-BEST_Val_NDCG@20:    <max of val/ndcg@20>
-BEST_Test_Recall@20: <test recall at recall-best val epoch>
-BEST_Test_Precision@20: <test precision at recall-best val epoch>
-BEST_Test_NDCG@20:   <test NDCG at ndcg-best val epoch>
+BEST_Val_Recall@10:        <max of val/recall@10>
+BEST_Val_Recall@20:        <max of val/recall@20>     ← matches WandB val/recall@20 max
+BEST_Val_Recall_Peak_Epoch:<epoch index of that maximum>
+BEST_Val_NDCG@10:          <max of val/ndcg@10>
+BEST_Val_NDCG@20:          <max of val/ndcg@20>
+BEST_Val_NDCG_Peak_Epoch:  <epoch index of that maximum>
+BEST_Test_Recall@20:       <test recall at recall-best val epoch>
+BEST_Test_Precision@20:    <test precision at recall-best val epoch>
+BEST_Test_NDCG@20:         <test NDCG at ndcg-best val epoch>
 ```
 
 The two `BEST_Test_*` lines are pinned to the validation epoch where the *corresponding* validation metric peaked — even if a *later* epoch only improves NDCG (or only improves Recall) and overwrites the running test snapshot. Previously the code overwrote `test_ret` on every improvement of either kind, which meant `BEST_Test_Recall@K` could end up reflecting a non-recall-optimal validation epoch. The refactored tracker fixes this corner case.
 
-The WandB `val` section now also surfaces `val/ndcg@10` (alongside `val/recall@10`, `val/recall@20`, `val/ndcg@20`, `val/precision@20`, `val/hit@20`) so NDCG@10 can be inspected mid-training.
+#### 5.2.1 Why a chart maximum and a `BEST_Test_*` line can disagree
+
+The most common confusion is comparing a **WandB chart maximum** to a **`BEST_Test_*`** number and concluding that something is mis-computed. This can happen for three orthogonal reasons; the trainer now defends against all three:
+
+1. **Validation vs. test split.** `val/recall@20` (the chart with the `val/` prefix) is the **validation** Recall, used for early stopping. `BEST_Test_Recall@20` is the **test** Recall snapshotted at the validation peak. Validation recall is typically higher than test recall on Amazon Clothing — this is *not* a bug, it is the standard "select-on-val, report-on-test" methodology. To compare apples-to-apples, look at `BEST_Val_Recall@20` (text log) or `best_val_recall@20` (WandB summary), both of which exactly match the chart maximum.
+2. **`epoch` vs. WandB `_step`.** WandB's default X-axis is `_step`, a counter that increments on every `wandb.log()` call. The trainer logs train metrics, val metrics, test metrics (when validation improves), and rebuild diagnostics — all separately — so `_step` runs ~1.5–2× ahead of the true training epoch. To eliminate this confusion the trainer now calls `wandb.define_metric("*", step_metric="epoch")` immediately after `wandb.init`, which makes `epoch` the canonical X-axis on every chart. `BEST_Val_Recall_Peak_Epoch` (also written to `wandb.summary["best_val_recall_peak_epoch"]`) is the epoch at which `val/recall@20` peaked — use it to verify the chart point against the headline.
+3. **Multiple variants share a seed.** The rev44 Phase 1 sweep runs the same seed under four configurations (anchor / tau03 / avrf_off / combined), each producing its own WandB run with `phase1_<variant>_seed_<N>` in the run name. A chart that aggregates across runs will show maxima coming from whichever variant scored highest — which is *not* necessarily the variant whose `BEST_Test_*` line you are comparing against. Filter by the WandB run name (or by the `ablation_target` / `damps/tau_learnable` summary keys) before reading off the maximum.
+
+The WandB `val` section also surfaces `val/ndcg@10` (alongside `val/recall@10`, `val/recall@20`, `val/ndcg@20`, `val/precision@20`, `val/hit@20`) so NDCG@10 can be inspected mid-training.
 
 ---
 
