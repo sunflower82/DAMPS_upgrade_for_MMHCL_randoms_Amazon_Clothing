@@ -479,6 +479,26 @@ class Trainer:
                 init_kwargs["name"] = args.wandb_run_name
             self.wandb.init(**init_kwargs)
 
+            # ----- Make ``epoch`` the canonical X-axis for every chart -----
+            # WandB defaults to ``_step`` (the monotonic counter that
+            # increments by 1 on every ``wandb.log()`` call). Because we
+            # call ``log()`` 2-3x per epoch (train + val + maybe test +
+            # rebuild), ``_step`` runs ahead of the true training epoch
+            # by ~1.5x: a 250-epoch run shows up as ``_step ~ 360+`` on
+            # the chart, which has caused real users to misread the
+            # X-axis as the epoch counter. The two calls below redirect
+            # **every** logged metric to use ``epoch`` as the step axis,
+            # so what you see on the chart is what is logged in the per
+            # run text file.
+            try:
+                self.wandb.define_metric("epoch")
+                self.wandb.define_metric("*", step_metric="epoch")
+            except Exception as exc:                                # pragma: no cover
+                self.logger.logging(
+                    f"[wandb] define_metric() unavailable in this wandb "
+                    f"version ({exc}); charts will fall back to _step."
+                )
+
         n_batch = data_generator.n_train // self.batch_size + 1
         # ------------------------------------------------------------------
         # Best-validation tracking
@@ -496,6 +516,8 @@ class Trainer:
         # ------------------------------------------------------------------
         best_val_recall: float = 0.0   # max of val/recall@Ks[-1]
         best_val_ndcg: float = 0.0     # max of val/ndcg@Ks[-1]
+        best_val_recall_epoch: int = -1   # epoch at which best_val_recall was reached
+        best_val_ndcg_epoch: int = -1     # epoch at which best_val_ndcg was reached
         best_val_at_recall_peak: Optional[dict[str, Any]] = None
         best_val_at_ndcg_peak: Optional[dict[str, Any]] = None
         test_at_recall_peak: Optional[dict[str, Any]] = None
@@ -696,6 +718,7 @@ class Trainer:
                 # later epoch only improves NDCG and overwrites ``test_ret``.
                 if val["recall"][1] > best_val_recall:
                     best_val_recall = float(val["recall"][1])
+                    best_val_recall_epoch = int(epoch)
                     best_val_at_recall_peak = {
                         "recall": np.array(val["recall"], copy=True),
                         "ndcg": np.array(val["ndcg"], copy=True),
@@ -711,6 +734,7 @@ class Trainer:
                 # Same idea for the ndcg-best snapshot.
                 if val["ndcg"][1] > best_val_ndcg:
                     best_val_ndcg = float(val["ndcg"][1])
+                    best_val_ndcg_epoch = int(epoch)
                     best_val_at_ndcg_peak = {
                         "recall": np.array(val["recall"], copy=True),
                         "ndcg": np.array(val["ndcg"], copy=True),
@@ -759,12 +783,18 @@ class Trainer:
             self.logger.logging(
                 f"BEST_Val_Recall@{Ks[1]}: {best_val_recall:.8f}"
             )
+            self.logger.logging(
+                f"BEST_Val_Recall_Peak_Epoch: {best_val_recall_epoch}"
+            )
         if best_val_at_ndcg_peak is not None:
             self.logger.logging(
                 f"BEST_Val_NDCG@{Ks[0]}: {float(best_val_at_ndcg_peak['ndcg'][0]):.8f}"
             )
             self.logger.logging(
                 f"BEST_Val_NDCG@{Ks[1]}: {best_val_ndcg:.8f}"
+            )
+            self.logger.logging(
+                f"BEST_Val_NDCG_Peak_Epoch: {best_val_ndcg_epoch}"
             )
 
         # ``BEST_Test_Recall@K`` is the test-set recall at the epoch where
@@ -791,11 +821,20 @@ class Trainer:
                     best_val_at_recall_peak["recall"][0]
                 )
                 self.wandb.summary[f"best_val_recall@{Ks[-1]}"] = best_val_recall
+                # Record the epoch at which val/recall@K peaked so a reviewer
+                # can correlate the W&B chart maximum with the run-summary
+                # number without doing arithmetic on the _step axis.
+                self.wandb.summary["best_val_recall_peak_epoch"] = (
+                    best_val_recall_epoch
+                )
             if best_val_at_ndcg_peak is not None:
                 self.wandb.summary[f"best_val_ndcg@{Ks[0]}"] = float(
                     best_val_at_ndcg_peak["ndcg"][0]
                 )
                 self.wandb.summary[f"best_val_ndcg@{Ks[-1]}"] = best_val_ndcg
+                self.wandb.summary["best_val_ndcg_peak_epoch"] = (
+                    best_val_ndcg_epoch
+                )
             if test_at_recall_peak is not None:
                 self.wandb.summary[f"best_test_recall@{Ks[-1]}"] = float(
                     test_at_recall_peak["recall"][1]
