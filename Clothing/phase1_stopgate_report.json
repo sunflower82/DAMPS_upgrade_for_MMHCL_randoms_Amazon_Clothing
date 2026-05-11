@@ -1,0 +1,106 @@
+{
+  "stopgate_thresholds": {
+    "acceptance_recall@20": 0.087,
+    "acceptance_ndcg@20": 0.039,
+    "paper_validation_recall@20": 0.09
+  },
+  "bonferroni_N": 3,
+  "paired_ttest": {
+    "tau03": {
+      "recall@20": {
+        "t_stat": 2.674094474994209,
+        "p_value": 0.055568734586220234,
+        "alpha_corrected": 0.016666666666666666,
+        "bonferroni": 3,
+        "ci_low": -0.0016442486419061212,
+        "ci_high": 0.008478636641906128,
+        "mean_diff": 0.0034171939999999984,
+        "significant": false
+      },
+      "ndcg@20": {
+        "t_stat": 4.30616929986569,
+        "p_value": 0.012584073785627379,
+        "alpha_corrected": 0.016666666666666666,
+        "bonferroni": 3,
+        "ci_low": 0.00013709650871690472,
+        "ci_high": 0.003281491491283101,
+        "mean_diff": 0.0017092940000000014,
+        "significant": true
+      }
+    },
+    "avrf_off": {
+      "recall@20": {
+        "t_stat": 2.6265893827980538,
+        "p_value": 0.058394503993796726,
+        "alpha_corrected": 0.016666666666666666,
+        "bonferroni": 3,
+        "ci_low": -0.0004107419533736982,
+        "ci_high": 0.0020279699533736935,
+        "mean_diff": 0.0008086139999999963,
+        "significant": false
+      },
+      "ndcg@20": {
+        "t_stat": 3.616701609757878,
+        "p_value": 0.02242273818645261,
+        "alpha_corrected": 0.016666666666666666,
+        "bonferroni": 3,
+        "ci_low": -5.677269441865232e-05,
+        "ci_high": 0.0012502566944186566,
+        "mean_diff": 0.0005967420000000015,
+        "significant": false
+      }
+    },
+    "combined": {
+      "recall@20": {
+        "t_stat": 3.4786787309513794,
+        "p_value": 0.02538244925887159,
+        "alpha_corrected": 0.016666666666666666,
+        "bonferroni": 3,
+        "ci_low": -0.0007820035945852672,
+        "ci_high": 0.01206719559458527,
+        "mean_diff": 0.0056425959999999945,
+        "significant": false
+      },
+      "ndcg@20": {
+        "t_stat": 5.017361247270084,
+        "p_value": 0.007399116388294962,
+        "alpha_corrected": 0.016666666666666666,
+        "bonferroni": 3,
+        "ci_low": 0.000553283542469345,
+        "ci_high": 0.004701476457530662,
+        "mean_diff": 0.002627380000000001,
+        "significant": true
+      }
+    }
+  },
+  "verdicts": {
+    "anchor": {
+      "recall@20_mean": 0.07949274,
+      "ndcg@20_mean": 0.03798123999999999,
+      "beat_acceptance": false,
+      "beat_paper": false,
+      "verdict": "PHASE 1 FAIL     (re-audit eval protocol; checklist (iii) all-ranking vs sampled is the highest-suspicion mismatch)"
+    },
+    "tau03": {
+      "recall@20_mean": 0.08290993399999999,
+      "ndcg@20_mean": 0.039690534,
+      "beat_acceptance": false,
+      "beat_paper": false,
+      "verdict": "PHASE 1 FAIL     (re-audit eval protocol; checklist (iii) all-ranking vs sampled is the highest-suspicion mismatch)"
+    },
+    "avrf_off": {
+      "recall@20_mean": 0.080301354,
+      "ndcg@20_mean": 0.038577982,
+      "beat_acceptance": false,
+      "beat_paper": false,
+      "verdict": "PHASE 1 FAIL     (re-audit eval protocol; checklist (iii) all-ranking vs sampled is the highest-suspicion mismatch)"
+    },
+    "combined": {
+      "recall@20_mean": 0.08513533599999999,
+      "ndcg@20_mean": 0.04060862,
+      "beat_acceptance": false,
+      "beat_paper": false,
+      "verdict": "PHASE 1 FAIL     (re-audit eval protocol; checklist (iii) all-ranking vs sampled is the highest-suspicion mismatch)"
+    }
+  }
+}
