@@ -104,6 +104,7 @@ MMHCL_DAMPS_Project/
 | `train.py` | `Trainer.maybe_rebuild_hypergraph` | §3.1 | Pattern B' Scheduled Rebuild every `R` epochs |
 | `train.py` | `_configure_cufft_cache` | §3.3 | Permanently disable cuFFT plan cache |
 | `scripts/audit_eval_protocol.py` | (entry point) | rev44 §4 | 7-point evaluation-protocol audit (see §6 below) |
+| `scripts/day1_diagnostic_sprint.py` | (entry point) | RootCause roadmap §2 | D1 metadata audit + optional D2 top-K sweep + D3 pure-MMHCL baseline (H2/H3/H10) |
 | `scripts/run_phase1_ablation.py` | (entry point) | rev44 §4 | Sweep all four Phase 1 configurations × N seeds + Bonferroni-corrected paired t-tests |
 | `scripts/paired_ttest.py` | `paired_ttest_report` | rev44 §4 | Paired *t*-test with optional `--bonferroni N` correction |
 
@@ -226,6 +227,39 @@ Every `R`-th epoch the training loop emits two transparency probes mandated by �
 * **baseline_asc** — confirms the IMCF residual coefficient is correctly centred.
 
 When `--use_wandb 1`, the same metrics stream to your W&B run for cross-experiment comparison.
+
+### 5.0 Day 1 diagnostic sprint (Recall@20 vs NDCG@20 — roadmap §2)
+
+When **NDCG@20 already passes** the Phase 1 stop-gate but **Recall@20 lags**, run the cheap probes from `Phase1_RootCause_Analysis_and_Remediation_Roadmap.tex` **before** spending GPU weeks on Phase 2:
+
+| Step | What it tests | Cost |
+| ---- | ------------- | ---- |
+| **D1** | `meta_categories.npy` existence, length vs `n_items`, label cardinality (H2 — APC hash fallback) | CPU-only |
+| **D2** | `--topk` sweep `{10,15,20}` on the combined Phase-1 recipe (H3 — hypergraph too sparse at K=5) | ~3× one full train |
+| **D3** | Pure MMHCL (`--damps_* 0`, learnable τ) on the **same** all-ranking protocol (H10 — paper vs eval scale) | 1× full train |
+
+```bash
+cd MMHCL_DAMPS_Project
+
+# 1) Always start here (exit code 1 => roadmap suspects H2):
+python scripts/day1_diagnostic_sprint.py --dataset Clothing --data_path ../data/
+
+# 2) Preview GPU commands without executing:
+python scripts/day1_diagnostic_sprint.py --dataset Clothing --data_path ../data/ \
+    --print-commands --run-d2 --run-d3 --run-d1-apc-probe
+
+# 3) Execute D2 + D3 (+ optional APC-off probe) — uses seed 737791071 by default:
+python scripts/day1_diagnostic_sprint.py --dataset Clothing --data_path ../data/ \
+    --run-d2 --run-d3 --run-d1-apc-probe
+
+# Quick smoke (does NOT satisfy the full statistical protocol):
+python scripts/day1_diagnostic_sprint.py --dataset Clothing --epoch 75 --run-d2 --run-d3
+```
+
+Each training run is tagged with `--ablation_target diag_*` so logs land in
+separate folders under `../Clothing/`. After each job the script prints the
+resolved log path and parses `BEST_Test_Recall@20` / `BEST_Test_NDCG@20` when
+available.
 
 ### 5.1 rev44 / Phase 1 Quick Win — running the four-variant sweep
 
