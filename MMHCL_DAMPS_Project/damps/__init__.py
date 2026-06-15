@@ -16,6 +16,11 @@ from .core import DAMPS
 from .momentum import SlimMomentumEncoder
 from .graph import DualPathKNN, adj_nnz, adj_avg_degree
 from .prior import compute_avrf_prior, compute_avrf_logit
+from .popularity_prior import (
+    compute_item_counts,
+    compute_log_q,
+    load_or_build_log_q,
+)
 
 __all__ = [
     "DAMPS",
@@ -25,4 +30,7 @@ __all__ = [
     "adj_avg_degree",
     "compute_avrf_prior",
     "compute_avrf_logit",
+    "compute_item_counts",
+    "compute_log_q",
+    "load_or_build_log_q",
 ]

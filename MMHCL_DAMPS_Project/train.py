@@ -294,10 +294,42 @@ class Trainer:
             warmup_epochs=args.damps_warmup_epochs,
             damps_num_categories=args.damps_num_categories,
             data_driven_prior=bool(args.damps_data_driven_prior),
+            enable_logq=bool(args.enable_logq),
+            logq_scale=float(args.logq_scale),
+            logq_clip=float(args.logq_clip),
         ).to(self.device)
         self.model.set_meta_categories(
             data_generator.meta_categories.to(self.device)
         )
+
+        # ------------------------------------------------------------------
+        # rev53 §3.1 — Build the LogQ popularity prior and register it
+        # on the model. Cached under data_generator.path.
+        # ------------------------------------------------------------------
+        if bool(args.enable_logq):
+            from damps.popularity_prior import (
+                load_or_build_log_q,
+                describe_log_q,
+                compute_item_counts,
+            )
+            log_q = load_or_build_log_q(
+                cache_dir=data_generator.path,
+                n_items=self.n_items,
+                train_items=data_generator.train_items,
+                beta=float(args.logq_beta),
+                mode=str(args.logq_mode),
+                force_rebuild=False,
+            )
+            self.model.set_log_q(log_q.to(self.device))
+            counts = compute_item_counts(
+                data_generator.train_items, self.n_items
+            )
+            self.logger.logging(
+                "[LogQ] " + ", ".join(
+                    f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
+                    for k, v in describe_log_q(log_q, counts=counts).items()
+                )
+            )
 
         self.logger.logging(
             f"DAMPS trainable params: {self.model.damps.num_trainable_params()}"
@@ -573,10 +605,10 @@ class Trainer:
                     bmf, bemb, _ = self.bpr_loss(u_g, pos_g, neg_g)
 
                     bcl_item = self.model.batched_contrastive_loss(
-                        out["i_ui_emb"], out["ii_emb"]
+                        out["i_ui_emb"], out["ii_emb"], apply_logq=True,
                     ) * args.item_loss_ratio
                     bcl_user = self.model.batched_contrastive_loss(
-                        out["u_ui_emb"], out["uu_emb"]
+                        out["u_ui_emb"], out["uu_emb"], apply_logq=False,
                     ) * args.user_loss_ratio
                     bcl = bcl_item + bcl_user
                     batch_total = bmf + bemb + bcl
