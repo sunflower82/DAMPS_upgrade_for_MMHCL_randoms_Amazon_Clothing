@@ -184,6 +184,9 @@ class DAMPS_MMHCL(nn.Module):
         warmup_epochs: int = 10,
         damps_num_categories: int = 10,
         data_driven_prior: bool = True,
+        enable_logq: bool = False,            # rev53 §3.1 — variant "h"
+        logq_scale: float = 1.0,              # multiplier on log_q before subtraction
+        logq_clip: float = 5.0,               # symmetric clip on scale*log_q
     ) -> None:
         super().__init__()
 
@@ -384,6 +387,32 @@ class DAMPS_MMHCL(nn.Module):
         else:
             self.register_buffer("tau", tau_tensor)
 
+        # ------------------------------------------------------------------
+        # 10. LogQ correction state (rev53 §3.1, eq. 1 — variant "h")
+        # ------------------------------------------------------------------
+        # Toggles the popularity-corrected InfoNCE proposed by Yi et al.
+        # (RecSys 2019). When enable_logq=True, batched_contrastive_loss
+        # subtracts ``logq_scale * clip(log_q[j], -logq_clip, +logq_clip)``
+        # from per-column logits BEFORE dividing by τ and taking exp.
+        #
+        # The log_q buffer must be populated via set_log_q(...) before the
+        # first training step; an uninitialised (all-zero) buffer triggers
+        # a fail-fast inside batched_contrastive_loss to avoid silently
+        # disabling the correction (rev53 §3.1, line 104).
+        #
+        # logq_scale and logq_clip default to (1.0, 5.0) which matches the
+        # rev53 spec literally. For τ=0.3 and cosine sim ∈ [-1,1], expect
+        # log_q ∈ [-12, -4] at Amazon Clothing scale, so the unscaled
+        # subtraction will dominate the τ-normalised logits. The first
+        # sanity sweep MUST cover logq_scale ∈ {0.05, 0.1, 0.3, 1.0} on a
+        # subset of seeds before locking the spec default — see the M1.5
+        # protocol in the LogQ README.
+        # ------------------------------------------------------------------
+        self.enable_logq: bool = bool(enable_logq)
+        self.logq_scale: float = float(logq_scale)
+        self.logq_clip: float = float(logq_clip)
+        self.register_buffer("log_q", torch.zeros(n_items, dtype=torch.float32))
+
     # ------------------------------------------------------------------
     #  Setters & accessors
     # ------------------------------------------------------------------
@@ -394,6 +423,28 @@ class DAMPS_MMHCL(nn.Module):
                 f"meta_categories length {cats.shape[0]} != n_items {self.n_items}"
             )
         self.meta_categories.copy_(cats.long())
+
+    def set_log_q(self, log_q: torch.Tensor) -> None:
+        """Register the per-item log-popularity vector (n_items,).
+
+        Must be called once after model construction, before the first
+        training step, when ``enable_logq=True``. The tensor is copied
+        into the registered buffer so it follows the model on .to(device)
+        and is persisted by state_dict.
+
+        Source of truth: ``damps.popularity_prior.load_or_build_log_q``.
+        """
+        if log_q.shape != (self.n_items,):
+            raise ValueError(
+                f"log_q shape {tuple(log_q.shape)} != ({self.n_items},)"
+            )
+        if not torch.isfinite(log_q).all():
+            n_bad = int((~torch.isfinite(log_q)).sum())
+            raise ValueError(
+                f"log_q contains {n_bad} non-finite value(s); "
+                "rebuild with mode='laplace' and beta > 0."
+            )
+        self.log_q.copy_(log_q.detach().to(self.log_q.dtype))
 
     @property
     def has_item_branch(self) -> bool:
@@ -607,30 +658,84 @@ class DAMPS_MMHCL(nn.Module):
         z1: torch.Tensor,
         z2: torch.Tensor,
         batch_size: int = 4096,
+        apply_logq: bool = False,
     ) -> torch.Tensor:
         """
-        InfoNCE contrastive loss with InfoNCE temperature τ.
+        InfoNCE contrastive loss with optional LogQ popularity correction.
 
-        τ may be either a learnable ``nn.Parameter`` (rev42 baseline) or a
-        non-trainable buffer (rev44 Phase 1). In both cases it is clamped at
-        0.01 from below to prevent division by zero / numerical explosion.
+        Math (rev53 §3.1, eq. 1; variant "h"):
+            L_NCEQ = - log[ exp((sim(u,i+) - s·clip(log_q(i+))) / τ) /
+                            Σ_j exp((sim(u,i-) - s·clip(log_q(j))) / τ) ]
+        where s = logq_scale and clip(·) = clamp(·, -logq_clip, +logq_clip).
+
+        Args:
+            z1, z2     : (N, d) row-normalised embeddings. Positive pairs
+                         are the diagonal of sim(z1, z2). Rows index either
+                         items (for ``bcl_item``) or users (for ``bcl_user``).
+            batch_size : column-chunk size for the row-wise InfoNCE
+                         (unchanged from rev45).
+            apply_logq : when True AND ``self.enable_logq=True``, subtract
+                         the scaled+clipped log_q from each column logit.
+                         When False, the loss reduces to the original
+                         rev45 baseline (bit-for-bit identical).
+
+        Backward compatibility:
+            * Existing call ``self.model.batched_contrastive_loss(z1, z2)``
+              uses ``apply_logq=False`` — no behaviour change.
+            * The user-branch call MUST stay at ``apply_logq=False`` because
+              log_q is an item-popularity prior; applying it on users would
+              double-count user activity bias.
         """
         device = z1.device
         num_nodes = z1.size(0)
         num_batches = (num_nodes - 1) // batch_size + 1
-        # ``torch.clamp`` works identically on Parameter and buffer; the
-        # latter simply has no autograd hook so the clamped value flows
-        # downstream as a plain scalar tensor.
         tau = torch.clamp(self.tau, min=0.01)
 
-        f: Callable[[torch.Tensor], torch.Tensor] = lambda x: torch.exp(x / tau)
+        # Decide once per call whether we are in LogQ mode.
+        use_logq = bool(self.enable_logq and apply_logq)
+        if use_logq:
+            if self.log_q.shape[0] != num_nodes:
+                raise ValueError(
+                    f"LogQ correction requires log_q.shape[0] == z1.shape[0]; "
+                    f"got log_q={self.log_q.shape[0]}, z1={num_nodes}. "
+                    "Pass apply_logq=True ONLY on the item branch."
+                )
+            if float(self.log_q.abs().sum()) == 0.0:
+                # Fail-fast (rev53 §3.1, line 104): an uninitialised log_q
+                # buffer would silently disable the correction.
+                raise RuntimeError(
+                    "enable_logq=True but log_q is zero. "
+                    "Call model.set_log_q(...) once after construction."
+                )
+            log_q_term = torch.clamp(
+                self.logq_scale * self.log_q.to(device),
+                min=-self.logq_clip,
+                max=+self.logq_clip,
+            )                                                 # (num_nodes,)
+
+            def f_logq(
+                sim_block: torch.Tensor,
+                col_slice: torch.Tensor,
+            ) -> torch.Tensor:
+                return torch.exp(
+                    (sim_block - log_q_term[col_slice][None, :]) / tau
+                )
+        else:
+            def f_simple(sim_block: torch.Tensor) -> torch.Tensor:  # type: ignore[misc]
+                return torch.exp(sim_block / tau)
+
         indices = torch.arange(0, num_nodes, device=device)
         losses: list[torch.Tensor] = []
 
         for i in range(num_batches):
             mask = indices[i * batch_size : (i + 1) * batch_size]
-            refl_sim = f(self._sim(z1[mask], z1))
-            between_sim = f(self._sim(z1[mask], z2))
+            if use_logq:
+                # All columns participate, so col_slice is the full indices.
+                refl_sim = f_logq(self._sim(z1[mask], z1), indices)
+                between_sim = f_logq(self._sim(z1[mask], z2), indices)
+            else:
+                refl_sim = f_simple(self._sim(z1[mask], z1))
+                between_sim = f_simple(self._sim(z1[mask], z2))
 
             losses.append(
                 -torch.log(

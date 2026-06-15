@@ -192,6 +192,33 @@ def parse_args() -> argparse.Namespace:
                         help="Warm-up window for adaptive EMA schedules.")
 
     # =====================================================================
+    #  rev53 §3.1 — LogQ popularity correction (variant "h")
+    # =====================================================================
+    parser.add_argument("--enable_logq", type=int, default=0,
+                        help="1 enables the LogQ popularity correction in "
+                             "the item-branch InfoNCE (rev53 §3.1 eq. 1). "
+                             "Requires --logq_mode and --logq_beta to be set; "
+                             "log_q is rebuilt and cached under the dataset "
+                             "directory on first use.")
+    parser.add_argument("--logq_mode", type=str, default="laplace",
+                        choices=["laplace", "raw", "sqrt"],
+                        help="q(i) estimator. 'laplace' = (n+β)/(N+|I|β); "
+                             "'sqrt' = the DGRec WWW2024 less-aggressive "
+                             "variant; 'raw' requires every item >= 1 "
+                             "interaction (rare).")
+    parser.add_argument("--logq_beta", type=float, default=1.0,
+                        help="Laplace smoothing coefficient β > 0 for "
+                             "logq_mode in {laplace, sqrt}. Ignored for raw.")
+    parser.add_argument("--logq_scale", type=float, default=1.0,
+                        help="Multiplier on log_q before subtraction. With "
+                             "cosine-normalised sim and τ=0.3, the spec "
+                             "default 1.0 may dominate the logits; sweep "
+                             "{0.05, 0.1, 0.3, 1.0} at M1.5 before locking.")
+    parser.add_argument("--logq_clip", type=float, default=5.0,
+                        help="Symmetric clip on logq_scale*log_q to keep "
+                             "exp(./τ) numerically safe.")
+
+    # =====================================================================
     #  Pattern B' (Scheduled Rebuild)
     # =====================================================================
     parser.add_argument("--rebuild_R", type=int, default=5,
