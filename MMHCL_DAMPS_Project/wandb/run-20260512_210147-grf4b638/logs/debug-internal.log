@@ -1,0 +1,27 @@
+{"time":"2026-05-12T21:01:49.5336991+07:00","level":"INFO","msg":"stream: starting","core version":"0.24.2"}
+{"time":"2026-05-12T21:01:50.0331148+07:00","level":"INFO","msg":"stream: created new stream","id":"grf4b638"}
+{"time":"2026-05-12T21:01:50.0331148+07:00","level":"INFO","msg":"handler: started","stream_id":"grf4b638"}
+{"time":"2026-05-12T21:01:50.0372596+07:00","level":"INFO","msg":"stream: started","id":"grf4b638"}
+{"time":"2026-05-12T21:01:50.0372596+07:00","level":"INFO","msg":"sender: started","stream_id":"grf4b638"}
+{"time":"2026-05-12T21:01:50.0372596+07:00","level":"INFO","msg":"writer: started","stream_id":"grf4b638"}
+{"time":"2026-05-12T21:18:42.3681407+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T21:19:40.0684817+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T21:31:57.9706976+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T21:34:22.6881994+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T21:42:45.3943526+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T21:58:15.2302659+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T22:02:46.8319323+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T22:16:35.2735806+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T22:25:03.6397234+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T22:26:00.8521102+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T22:27:46.8064504+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T22:28:47.8877943+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T22:39:45.0430705+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T22:40:42.536962+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T22:44:01.7913947+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/grf4b638/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T22:51:40.6216909+07:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2026-05-12T22:51:46.4738279+07:00","level":"INFO","msg":"handler: operation stats","stats":{}}
+{"time":"2026-05-12T22:51:46.4771338+07:00","level":"INFO","msg":"stream: closing","id":"grf4b638"}
+{"time":"2026-05-12T22:51:46.4771338+07:00","level":"INFO","msg":"handler: closed","stream_id":"grf4b638"}
+{"time":"2026-05-12T22:51:46.4771338+07:00","level":"INFO","msg":"sender: closed","stream_id":"grf4b638"}
+{"time":"2026-05-12T22:51:46.4771338+07:00","level":"INFO","msg":"stream: closed","id":"grf4b638"}

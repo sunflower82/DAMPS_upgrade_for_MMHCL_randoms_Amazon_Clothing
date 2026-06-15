@@ -1,0 +1,21 @@
+2026-04-30 20:32:44,679 INFO    MainThread:43004 [wandb_setup.py:_flush():81] Current SDK version is 0.24.2
+2026-04-30 20:32:44,679 INFO    MainThread:43004 [wandb_setup.py:_flush():81] Configure stats pid to 43004
+2026-04-30 20:32:44,679 INFO    MainThread:43004 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-04-30 20:32:44,679 INFO    MainThread:43004 [wandb_init.py:setup_run_log_directory():717] Logging user logs to c:\Users\Anh Khoi\Desktop\MyCode\My research progress\DAMPS_upgrade_for_MMHCL_randoms_Amazon_Clothing\MMHCL_DAMPS_Project\wandb\run-20260430_203244-sb5adz7m\logs\debug.log
+2026-04-30 20:32:44,679 INFO    MainThread:43004 [wandb_init.py:setup_run_log_directory():718] Logging internal logs to c:\Users\Anh Khoi\Desktop\MyCode\My research progress\DAMPS_upgrade_for_MMHCL_randoms_Amazon_Clothing\MMHCL_DAMPS_Project\wandb\run-20260430_203244-sb5adz7m\logs\debug-internal.log
+2026-04-30 20:32:44,680 INFO    MainThread:43004 [wandb_init.py:init():844] calling init triggers
+2026-04-30 20:32:44,680 INFO    MainThread:43004 [wandb_init.py:init():849] wandb.init called with sweep_config: {}
+config: {'data_path': '../data/', 'seed': 920786066, 'dataset': 'Clothing', 'core': 5, 'gpu_id': 0, 'debug': 'True', 'verbose': 5, 'epoch': 250, 'batch_size': 1024, 'regs': 0.001, 'lr': 0.0001, 'clip_grad_norm': 1.0, 'embed_size': 64, 'weight_size': '[64,64,64]', 'topk': 5, 'cf_model': 'LightGCN', 'norm_type': 'sym', 'sparse': 0, 'UI_layers': 2, 'User_layers': 3, 'Item_layers': 2, 'user_loss_ratio': 0.03, 'item_loss_ratio': 0.07, 'temperature': 0.1, 'Ks': '[10,20]', 'test_flag': 'part', 'early_stopping_patience': 30, 'early_stopping_min_epochs': 75, 'early_stopping_min_delta': 0.0001, 'early_stopping_mode': 'max', 'early_stopping_restore_best': 1, 'use_reduce_lr': 1, 'reduce_lr_factor': 0.5, 'reduce_lr_patience': 3, 'reduce_lr_min': 1e-06, 'use_wandb': 1, 'wandb_project': 'damps-mmhcl-clothing', 'wandb_entity': 'baitapck51cc-uet', 'wandb_run_name': 'seed_920786066', 'damps_apc': 1, 'damps_avrf': 1, 'damps_imcf': 1, 'damps_permutation_fft': 0, 'damps_soft_routing': 1, 'damps_momentum': 1, 'damps_data_driven_prior': 1, 'damps_num_categories': 10, 'damps_warmup_epochs': 10, 'rebuild_R': 5, 'faiss_threshold': 60000, 'knn_chunk_size': 4096, 'faiss_use_gpu': 1, 'knn_efsearch': 64, 'use_amp': 1, 'use_torch_compile': 1, 'torch_compile_mode': 'reduce-overhead', 'torch_compile_dynamic': 1, 'ablation_target': '', 'path_name': 'damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_R=5_apc=1_avrf=1_imcf=1_regs=0.001_dim=64_seed=920786066_', '_wandb': {}}
+2026-04-30 20:32:44,680 INFO    MainThread:43004 [wandb_init.py:init():892] starting backend
+2026-04-30 20:32:46,977 INFO    MainThread:43004 [wandb_init.py:init():895] sending inform_init request
+2026-04-30 20:32:47,012 INFO    MainThread:43004 [wandb_init.py:init():903] backend started and connected
+2026-04-30 20:32:47,025 INFO    MainThread:43004 [wandb_init.py:init():973] updated telemetry
+2026-04-30 20:32:47,052 INFO    MainThread:43004 [wandb_init.py:init():997] communicating run to backend with 90.0 second timeout
+2026-04-30 20:32:48,310 INFO    MainThread:43004 [wandb_init.py:init():1042] starting run threads in backend
+2026-04-30 20:32:48,380 INFO    MainThread:43004 [wandb_run.py:_console_start():2529] atexit reg
+2026-04-30 20:32:48,380 INFO    MainThread:43004 [wandb_run.py:_redirect():2377] redirect: wrap_raw
+2026-04-30 20:32:48,380 INFO    MainThread:43004 [wandb_run.py:_redirect():2446] Wrapping output streams.
+2026-04-30 20:32:48,380 INFO    MainThread:43004 [wandb_run.py:_redirect():2469] Redirects installed.
+2026-04-30 20:32:48,382 INFO    MainThread:43004 [wandb_init.py:init():1082] run started, returning control to user process
+2026-04-30 20:32:51,069 INFO    wandb-AsyncioManager-main:43004 [service_client.py:_forward_responses():94] Reached EOF.
+2026-04-30 20:32:51,069 INFO    wandb-AsyncioManager-main:43004 [mailbox.py:close():154] Closing mailbox, abandoning 1 handles.

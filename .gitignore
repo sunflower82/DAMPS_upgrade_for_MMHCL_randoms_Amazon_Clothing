@@ -3,6 +3,11 @@
 # =============================================================================
 
 
+# --- README (excluded from remote repository) ---
+README.md
+**/README.md
+
+
 # --- macOS / Windows metadata ---
 .DS_Store
 Thumbs.db
