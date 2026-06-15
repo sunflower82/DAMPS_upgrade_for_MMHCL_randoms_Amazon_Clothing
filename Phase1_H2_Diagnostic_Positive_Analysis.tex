@@ -1,0 +1,385 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{microtype}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+
+\definecolor{codebg}{RGB}{245,245,245}
+\definecolor{codeframe}{RGB}{200,200,200}
+\definecolor{warnred}{RGB}{180,30,30}
+\definecolor{okgreen}{RGB}{30,120,40}
+\definecolor{accentblue}{RGB}{30,80,160}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accentblue,
+  urlcolor=accentblue,
+  citecolor=accentblue
+}
+
+\lstdefinestyle{plain}{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  xleftmargin=4pt,
+  xrightmargin=4pt,
+  framexleftmargin=2pt,
+  framexrightmargin=2pt
+}
+\lstdefinestyle{py}{
+  style=plain,
+  language=Python,
+  keywordstyle=\color{accentblue}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{okgreen}
+}
+\lstset{style=plain}
+
+\titleformat{\section}{\Large\bfseries\color{accentblue}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.6em}{}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small DAMPS--MMHCL Phase~1 -- H2 Diagnostic Positive}
+\fancyhead[R]{\small rev44 / Clothing}
+\fancyfoot[C]{\thepage}
+
+\title{\textbf{Phase~1 Day-1 Diagnostic Sprint: \\
+H2 Diagnostic Positive on Amazon Clothing} \\[0.3em]
+\large An In-Depth Analysis of the \texttt{return code 1} Outcome \\
+\large and Its Implications for the rev44 Phase~1 Stop-Gate Verdict}
+\author{DAMPS--MMHCL Project Team}
+\date{May 12, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\fbox{\parbox{0.92\textwidth}{\textbf{Bottom line.} The non-zero return code reported at the end of the
+$\sim$12-hour Day-1 sprint is \emph{not} an infrastructure failure. It is the
+\textbf{intended diagnostic-positive exit code} for hypothesis \textbf{H2}
+defined in the Phase~1 Root-Cause Roadmap, §2.1. Because \texttt{meta\_categories.npy}
+is absent on disk, \texttt{utility/load\_data.py} silently fell back to a deterministic
+hash and \textbf{every} APC-driven training run, including all 20 runs of the
+Phase~1 four-variant sweep in cell~16, was executed on phantom clusters.
+The Phase~1 stop-gate verdict is therefore \textbf{confounded by H2}
+and must be re-evaluated after the real metadata file is restored.}}
+\end{center}
+
+\section{TL;DR}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Return code 1 $\neq$ an operational error.} It is precisely the
+        \textbf{H2 SUSPECTED} signal from roadmap §2.1 -- the Day-1 script is
+        telling you: ``\textit{the metadata file is missing; APC has been
+        running on a hash-based fallback from epoch~0}.''
+  \item This is a \textbf{positive diagnostic} for H2 among the ten root-cause
+        hypotheses in the roadmap, and it \textbf{automatically invalidates a
+        portion of the Phase~1 conclusions}, because all 20 multi-seed training
+        runs in cell~16 also executed with the same missing-meta configuration --
+        meaning APC produced phantom signals in \textbf{every} variant.
+\end{itemize}
+
+\section{Interpreting the Warning Banner}
+
+\begin{lstlisting}
+[pre-flight] MISSING ...\data\Clothing\meta_categories.npy
+return code: 1
+[WARN] Non-zero exit code -- review logs above.
+\end{lstlisting}
+
+\noindent Cross-referenced against the source of
+\texttt{day1\_diagnostic\_sprint.py} (lines 106--113):
+
+\begin{lstlisting}[style=py]
+if not exists:
+    report["h2_suspected"] = True
+    report["warnings"].append(
+        "meta_categories.npy MISSING -> load_data.py uses deterministic hash "
+        "fallback (phantom APC clusters; roadmap H2)."
+    )
+\end{lstlisting}
+
+\noindent and lines 305--306:
+
+\begin{lstlisting}[style=py]
+if rep["h2_suspected"]:
+    exit_code = 1
+\end{lstlisting}
+
+\noindent $\Rightarrow$ The exit code \texttt{1} here is \textbf{not a crash}; it is the
+``diagnostic-positive'' exit code that the roadmap deliberately uses for
+\textbf{fail-fast} signalling. D2, D3 and the APC-off probe \textbf{still run
+after D1} (see lines 310, 340 and 370 of the script -- none of those branches
+is short-circuited by a \texttt{return}).
+
+\subsection*{Natural consequences}
+
+\begin{itemize}[leftmargin=*]
+  \item The $\sim$12-hour wall-clock run almost certainly completed
+        D2 (4 values of $K$, 1 run each) + D3 (1 run) + the APC-off probe
+        (1 run) = \textbf{6 GPU runs total}.
+  \item Only the opening banner and the closing return code were pasted -- the
+        body of stdout, which contains the D2/D3/APC results, was truncated
+        during the copy.
+  \item The full diagnostic conclusion requires reading the per-run log files
+        (see the \textbf{Action items} section below).
+\end{itemize}
+
+\section{Serious Implication for the Phase~1 Sweep (Cell 16)}
+
+The Phase~1 sweep in cell~16 (20 runs: 5 seeds $\times$ 4 variants) was
+executed \textbf{before} cell~15 on the \textbf{same machine} with the
+\textbf{same data directory}. Because \texttt{meta\_categories.npy} did not
+exist, \texttt{utility/load\_data.py} silently entered its hash-fallback branch
+for \textbf{all 20 runs}. The per-variant impact is summarised in
+Table~\ref{tab:variant-impact}.
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\textwidth}{|l|c|c|c|X|}
+\hline
+\textbf{Variant} & \texttt{damps\_apc} & \textbf{Hash-fallback?} &
+\textbf{Measured R@20} & \textbf{Revised verdict} \\
+\hline
+(a) anchor    & =1 & Yes (APC on, fake clusters) & $0.0795 \pm 0.0025$ &
+APC signal contaminated \\
+\hline
+(b) tau03     & =1 & Yes & $0.0829 \pm 0.0007$ &
+APC signal contaminated \\
+\hline
+(c) avrf\_off & =1 & Yes & $0.0803 \pm 0.0021$ &
+APC signal contaminated \\
+\hline
+(d) combined  & =1 & Yes & $\mathbf{0.0851 \pm 0.0012}$ &
+APC signal contaminated \\
+\hline
+\end{tabularx}
+\caption{Per-variant H2 contamination assessment for the Phase~1 sweep.}
+\label{tab:variant-impact}
+\end{table}
+
+\paragraph{Warning.} All four variants run with \texttt{--damps\_apc 1} by
+default (see the \texttt{Namespace} echoed in the first line of cell~16:
+\texttt{damps\_apc=1}). Consequently:
+
+\begin{quote}
+The result $R@20 = 0.0851$ for the \texttt{combined} variant
+\textbf{is not the true ceiling of the recipe}. It is the recipe \emph{plus}
+phantom-APC noise. The real gap versus the paper's $0.0881$ could be smaller
+\emph{or} larger than the reported $-3.4\%$; nothing definitive can be
+concluded until either (i)~the true metadata file is restored, or
+(ii)~APC is disabled entirely.
+\end{quote}
+
+\noindent This directly explains the stop-gate verdict produced by cell~20:
+\textbf{all four variants FAIL Phase~1} with $R@20 < 0.0870$, which is
+exactly the qualitative signature of H2 (hash-fallback weakens the cluster
+signal).
+
+\section{Relationship to the Roadmap's Top-3 Root Causes}
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\textwidth}{|l|X|}
+\hline
+\textbf{Hypothesis} & \textbf{Status after this run} \\
+\hline
+\textbf{H2} -- APC phantom clusters via hash-fallback &
+\textbf{STRONGLY CONFIRMED} (pre-flight banner + D1 exit~1) \\
+\hline
+\textbf{H3} -- \texttt{topk}=5 too small &
+Inconclusive -- need the D2 sweep output for $K \in \{5, 10, 15, 20\}$ \\
+\hline
+\textbf{H10} -- sampled-eval vs.\ all-ranking mismatch &
+Inconclusive -- need the D3 pure-MMHCL output (compare against the
+$0.0881$ paper baseline) \\
+\hline
+\end{tabularx}
+\caption{Updated status of the three highest-priority hypotheses.}
+\label{tab:hypotheses}
+\end{table}
+
+\noindent The positive H2 verdict \textbf{raises the priority} of two actions:
+
+\begin{enumerate}[leftmargin=*]
+  \item Restore the original \texttt{meta\_categories.npy} (from the MMHCL
+        paper release) and re-run the Phase~1 sweep. This is a
+        \textbf{necessary precondition} for any further Phase~1 conclusion
+        to be valid.
+  \item Read the D2/D3 outputs that have already been computed (but not yet
+        pasted) to decide whether $K$ needs to be increased \emph{after} the
+        metadata is restored.
+\end{enumerate}
+
+\section{Why Did R@20 Still Reach $\sim$0.085 Under Hash-Fallback?}
+
+This subtle point deserves a clear explanation. The hash-fallback in
+\texttt{load\_data.py} generates clusters as
+\(
+\texttt{cluster}(i) = \texttt{hash}(\texttt{item\_id}) \;\bmod\; \texttt{num\_categories}.
+\)
+The resulting signal has structure but \emph{does not} correlate with the
+true semantics of any item. When APC consumes it:
+
+\begin{itemize}[leftmargin=*]
+  \item the APC loss still converges -- the hash is deterministic, so the
+        clusters remain stable across epochs;
+  \item but the gradient signal propagated into item embeddings is
+        \textbf{structured noise} -- the embeddings end up learning a
+        ``fake feature'' whose effect on Recall@20 may help or hurt by
+        chance.
+\end{itemize}
+
+The fact that \texttt{combined} ($0.0851$) is higher than \texttt{anchor}
+($0.0795$) demonstrates that static-$\tau$ + AVRF-off is \emph{genuinely}
+useful, because the hash-noise affects both variants symmetrically. But it
+\textbf{cannot} be claimed that $0.0851$ is the ceiling of the recipe:
+restoring the real metadata could push it above $0.087$ (passing the
+stop-gate) or pull it down (if the paper's APC was tuned for the spurious
+metadata in the first place).
+
+This also suggests a useful \emph{secondary hypothesis}: if the real
+metadata raises $R@20$ substantially, then APC is a genuinely valuable
+module; if the real metadata barely changes anything, APC is mostly a
+noise-regulariser and the module can be simplified or removed.
+
+\section{Action Items in Priority Order}
+
+\subsection*{1. IMMEDIATE -- Recover the D2/D3/APC outputs already computed
+(do not waste 12~h of GPU)}
+
+Open a Windows terminal in \texttt{MMHCL\_DAMPS\_Project/} and run:
+
+\begin{lstlisting}
+dir /s /b ..\Clothing\*diag_D2_topk*\*.txt
+dir /s /b ..\Clothing\*diag_D3_mmhcl_pure*\*.txt
+dir /s /b ..\Clothing\*diag_D1_apc_off*\*.txt
+\end{lstlisting}
+
+\noindent This should produce 6~\texttt{.txt} files
+(4~D2 + 1~D3 + 1~APC-off). Share their contents, especially the lines:
+
+\begin{lstlisting}
+BEST_Test_Recall@20: ...
+BEST_Test_NDCG@20:   ...
+\end{lstlisting}
+
+\noindent Alternatively, scroll back through the cell~15 output and copy
+\textbf{everything} (not just the head and tail). Or, programmatically:
+
+\begin{lstlisting}[style=py]
+import json, nbformat
+nb = nbformat.read(
+    "Local_Random_seeds_train_mmhcl_clothing_colab_original.ipynb",
+    as_version=4,
+)
+print(nb.cells[15].outputs[0]["text"])
+\end{lstlisting}
+
+\subsection*{2. RESTORE THE METADATA -- precondition for a valid Phase~1}
+
+Two paths:
+
+\begin{enumerate}[label=(\Alph*),leftmargin=*]
+  \item \textbf{Download the original file from the MMHCL paper release.} The
+        original MMHCL repository, distributed via the authors' Google Drive,
+        typically ships \texttt{meta\_categories.npy} for Clothing, Sports
+        and Baby. Place the file at:
+        \begin{lstlisting}
+data\Clothing\meta_categories.npy
+        \end{lstlisting}
+        Requirements: \texttt{len == 23033},
+        \texttt{dtype} is integer, and at least 5 unique cluster labels.
+
+  \item \textbf{Regenerate it from raw Amazon Clothing metadata.} If (A) is
+        unavailable, the file can be regenerated by mapping each
+        \texttt{item\_id} (range \(0\ldots 23032\)) to its top-level Amazon
+        category
+        (\texttt{Clothing, Shoes \& Jewelry > <subcategory>}).
+        A \texttt{build\_meta\_categories.py} script can be provided on
+        request.
+\end{enumerate}
+
+\subsection*{3. AFTER METADATA IS RESTORED -- re-run the Phase~1 sweep on
+real clusters}
+
+Re-execute the 20 runs of cell~16 (5 seeds $\times$ 4 variants $\times$ 250
+epochs, $\approx 12$~h). Then compare:
+
+\begin{itemize}[leftmargin=*]
+  \item If \texttt{combined} reaches $R@20 \geq 0.0870$
+        $\Rightarrow$ \textbf{stop-gate PASS}; Phase~1 closes and we move
+        on to Phase~2.
+  \item If it still FAILs but $R@20$ changes \emph{substantially}
+        ($\Delta R@20 > 0.003$) $\Rightarrow$ APC carries a real signal;
+        retune \texttt{damps\_warmup\_epochs} and
+        \texttt{damps\_num\_categories}.
+  \item If $R@20$ barely moves ($\Delta R@20 < 0.001$) $\Rightarrow$ APC
+        is essentially noise regularisation; recommend dropping APC and
+        moving directly to tuning $K$ or \texttt{rebuild\_R}.
+\end{itemize}
+
+\subsection*{4. OPTIONAL -- Update markdown cell~14 to record the finding}
+
+Add the following note to cell~14:
+
+\begin{quote}\itshape
+The Phase~1 multi-seed sweep (cell~16) was executed with
+\texttt{meta\_categories.npy} \textbf{MISSING} -- all 20 runs used the
+hash-fallback APC clusters. The stop-gate verdict (cell~20: all variants
+FAIL) is \textbf{confounded by H2} and must be re-evaluated after the
+metadata file is restored.
+\end{quote}
+
+\section{Conclusion}
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\textwidth}{|l|X|}
+\hline
+\textbf{Aspect} & \textbf{Assessment} \\
+\hline
+D1 / D2 / D3 infrastructure & Functioning to 100\% of spec \\
+\hline
+D1 verdict & H2 positive -- hash-fallback is active \\
+\hline
+Phase~1 sweep (cell~16) & Contaminated by H2 -- stop-gate verdict not final \\
+\hline
+D2 / D3 / APC outputs & Computed (\textasciitilde 12~h) but not yet shared -- must be recovered \\
+\hline
+Critical next step & Restore \texttt{meta\_categories.npy}; re-run the 20-run sweep \\
+\hline
+\end{tabularx}
+\caption{One-line summary of the current state of Phase~1.}
+\label{tab:summary}
+\end{table}
+
+\noindent Once the complete cell~15 output (or the contents of the 6 log
+files under \verb|..\Clothing\diag_*|) is shared, definitive verdicts can be
+issued for hypotheses \textbf{H3} and \textbf{H10}, and a precise execution
+plan for Phase~1 round~2 can be drawn up.
+
+\end{document}

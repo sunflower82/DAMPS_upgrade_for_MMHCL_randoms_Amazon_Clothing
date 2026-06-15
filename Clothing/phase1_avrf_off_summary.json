@@ -1,0 +1,159 @@
+{
+  "variant": "avrf_off",
+  "label": "(c) AVRF off only",
+  "overrides": {
+    "temperature": 0.1,
+    "learnable_tau": 1,
+    "damps_avrf": 0
+  },
+  "n_runs": 5,
+  "model": "DAMPS-MMHCL (rev44 / Revision 11 -- Phase 1)",
+  "seeds": [
+    717692932,
+    737791071,
+    194790642,
+    50462948,
+    367290921
+  ],
+  "statistics": {
+    "recall@20": {
+      "mean": 0.080301354,
+      "std": 0.0020642959722578557,
+      "values": [
+        0.08342367,
+        0.08109361,
+        0.07797777,
+        0.07955103,
+        0.07946069
+      ]
+    },
+    "precision@20": {
+      "mean": 0.00446001,
+      "std": 0.00011612165345016423,
+      "values": [
+        0.00463796,
+        0.00449478,
+        0.00432604,
+        0.00441808,
+        0.00442319
+      ]
+    },
+    "ndcg@20": {
+      "mean": 0.038577982,
+      "std": 0.0008627205682432764,
+      "values": [
+        0.03973078,
+        0.03918411,
+        0.03807614,
+        0.03760387,
+        0.03829501
+      ]
+    }
+  },
+  "damps_diagnostics": {
+    "tau_final": {
+      "mean": 1.0,
+      "std": 0.0,
+      "values": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "last_avg_deg": {
+      "mean": 66.304,
+      "std": 0.6331113646113147,
+      "values": [
+        66.5,
+        65.95,
+        65.38,
+        66.86,
+        66.83
+      ]
+    }
+  },
+  "individual_results": [
+    {
+      "variant": "avrf_off",
+      "variant_label": "(c) AVRF off only",
+      "seed": 717692932,
+      "recall@20": 0.08342367,
+      "precision@20": 0.00463796,
+      "ndcg@20": 0.03973078,
+      "val_recall@20": 0.08118473,
+      "val_ndcg@20": 0.03714857,
+      "val_recall_peak_epoch": 209,
+      "tau_final": 1.0,
+      "tanh_sat_final": null,
+      "last_nnz": null,
+      "last_avg_deg": 66.5,
+      "log_file": "../Clothing/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_taulearn=1_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=717692932_phase1_avrf_off/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_taulearn=1_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=717692932_phase1_avrf_off.txt"
+    },
+    {
+      "variant": "avrf_off",
+      "variant_label": "(c) AVRF off only",
+      "seed": 737791071,
+      "recall@20": 0.08109361,
+      "precision@20": 0.00449478,
+      "ndcg@20": 0.03918411,
+      "val_recall@20": 0.08058038,
+      "val_ndcg@20": 0.03700269,
+      "val_recall_peak_epoch": 159,
+      "tau_final": 1.0,
+      "tanh_sat_final": null,
+      "last_nnz": null,
+      "last_avg_deg": 65.95,
+      "log_file": "../Clothing/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_taulearn=1_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_phase1_avrf_off/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_taulearn=1_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_phase1_avrf_off.txt"
+    },
+    {
+      "variant": "avrf_off",
+      "variant_label": "(c) AVRF off only",
+      "seed": 194790642,
+      "recall@20": 0.07797777,
+      "precision@20": 0.00432604,
+      "ndcg@20": 0.03807614,
+      "val_recall@20": 0.0825886,
+      "val_ndcg@20": 0.0383536,
+      "val_recall_peak_epoch": 204,
+      "tau_final": 1.0,
+      "tanh_sat_final": null,
+      "last_nnz": null,
+      "last_avg_deg": 65.38,
+      "log_file": "../Clothing/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_taulearn=1_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=194790642_phase1_avrf_off/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_taulearn=1_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=194790642_phase1_avrf_off.txt"
+    },
+    {
+      "variant": "avrf_off",
+      "variant_label": "(c) AVRF off only",
+      "seed": 50462948,
+      "recall@20": 0.07955103,
+      "precision@20": 0.00441808,
+      "ndcg@20": 0.03760387,
+      "val_recall@20": 0.08190721,
+      "val_ndcg@20": 0.03811323,
+      "val_recall_peak_epoch": 204,
+      "tau_final": 1.0,
+      "tanh_sat_final": null,
+      "last_nnz": null,
+      "last_avg_deg": 66.86,
+      "log_file": "../Clothing/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_taulearn=1_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=50462948_phase1_avrf_off/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_taulearn=1_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=50462948_phase1_avrf_off.txt"
+    },
+    {
+      "variant": "avrf_off",
+      "variant_label": "(c) AVRF off only",
+      "seed": 367290921,
+      "recall@20": 0.07946069,
+      "precision@20": 0.00442319,
+      "ndcg@20": 0.03829501,
+      "val_recall@20": 0.07904468,
+      "val_ndcg@20": 0.03610437,
+      "val_recall_peak_epoch": 194,
+      "tau_final": 1.0,
+      "tanh_sat_final": null,
+      "last_nnz": null,
+      "last_avg_deg": 66.83,
+      "log_file": "../Clothing/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_taulearn=1_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=367290921_phase1_avrf_off/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_taulearn=1_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=367290921_phase1_avrf_off.txt"
+    }
+  ]
+}

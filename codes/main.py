@@ -449,6 +449,14 @@ class Trainer(object):
                         eval(args.Ks)[1], test_ret['ndcg'][1],
                     )
                 )
+                self.logger.logging(
+                    "Test_Recall@%d: %.8f   Test_Precision@%d: %.8f   "
+                    "Test_NDCG@%d: %.8f" % (
+                        eval(args.Ks)[0], test_ret['recall'][0],
+                        eval(args.Ks)[0], test_ret['precision'][0],
+                        eval(args.Ks)[0], test_ret['ndcg'][0],
+                    )
+                )
 
                 # W&B: log test metrics at this checkpoint
                 if args.use_wandb and wandb is not None:
@@ -457,6 +465,9 @@ class Trainer(object):
                         'test/recall@20': test_ret['recall'][1],
                         'test/precision@20': test_ret['precision'][1],
                         'test/ndcg@20': test_ret['ndcg'][1],
+                        'test/recall@10': test_ret['recall'][0],
+                        'test/precision@10': test_ret['precision'][0],
+                        'test/ndcg@10': test_ret['ndcg'][0],
                         'best_recall': best_recall,
                         'best_ndcg': best_ndcg,
                     })
@@ -498,11 +509,23 @@ class Trainer(object):
             self.logger.logging(
                 "BEST_Test_NDCG@%d: %.8f" % (Ks_list[1], test_ret['ndcg'][1])
             )
+            self.logger.logging(
+                "BEST_Test_Recall@%d: %.8f" % (Ks_list[0], test_ret['recall'][0])
+            )
+            self.logger.logging(
+                "BEST_Test_Precision@%d: %.8f" % (Ks_list[0], test_ret['precision'][0])
+            )
+            self.logger.logging(
+                "BEST_Test_NDCG@%d: %.8f" % (Ks_list[0], test_ret['ndcg'][0])
+            )
 
             if args.use_wandb and wandb is not None:
                 wandb.summary['best_test_recall@20'] = test_ret['recall'][1]
                 wandb.summary['best_test_precision@20'] = test_ret['precision'][1]
                 wandb.summary['best_test_ndcg@20'] = test_ret['ndcg'][1]
+                wandb.summary['best_test_recall@10'] = test_ret['recall'][0]
+                wandb.summary['best_test_precision@10'] = test_ret['precision'][0]
+                wandb.summary['best_test_ndcg@10'] = test_ret['ndcg'][0]
 
         self.logger.logging(str(test_ret))
         self.logger.logging_sum(f"{path_name}:{str(test_ret)}")

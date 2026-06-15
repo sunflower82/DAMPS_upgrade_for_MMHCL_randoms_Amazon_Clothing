@@ -1,0 +1,219 @@
+\documentclass[11pt,a4paper]{article}
+
+% --- Core packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[a4paper,top=1in,bottom=1in,left=1in,right=1in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{setspace}
+\setstretch{1.15}
+
+% --- Lists ---
+\usepackage{enumitem}
+
+% --- Tables ---
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+
+% --- Symbols (check / warn / info) ---
+\usepackage{pifont}
+\usepackage{xcolor}
+\definecolor{okgreen}{rgb}{0.00,0.55,0.00}
+\definecolor{warnorange}{rgb}{0.85,0.45,0.00}
+\definecolor{infoblue}{rgb}{0.08,0.30,0.60}
+\newcommand{\cmark}{\textcolor{okgreen}{\ding{51}}}
+\newcommand{\xmark}{\textcolor{warnorange}{\ding{55}}}
+\newcommand{\warn}{\textcolor{warnorange}{\ding{115}}}
+\newcommand{\info}{\textcolor{infoblue}{\ding{117}}}
+
+% --- Code listings ---
+\usepackage{listings}
+\definecolor{codebg}{rgb}{0.97,0.97,0.97}
+\definecolor{codekw}{rgb}{0.10,0.25,0.70}
+\definecolor{codestr}{rgb}{0.55,0.10,0.10}
+\definecolor{codecmt}{rgb}{0.25,0.55,0.25}
+\lstdefinestyle{py}{
+  language=Python,
+  backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{codekw}\bfseries,
+  stringstyle=\color{codestr},
+  commentstyle=\color{codecmt}\itshape,
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{gray!50},
+  tabsize=2,
+  columns=fullflexible,
+}
+\lstset{style=py}
+
+% --- Hyperlinks ---
+\usepackage[colorlinks=true,linkcolor=infoblue,citecolor=infoblue,urlcolor=infoblue,
+  pdftitle={DAMPS-MMHCL Speedup Completion Guide}]{hyperref}
+
+\title{Speedup Completion Guide for DAMPS-MMHCL\\[0.4em]
+\large Closing the Remaining Gaps to 100\% Compliance with the
+\textit{DAMPS\_MMHCL\_Training\_Speedup\_Guide\_EN}}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{Overall Verdict}
+The current implementation does \textbf{not} yet reach 100\% compliance. Based on a
+direct inspection of the GitHub repository and the attached Jupyter notebook, the
+runtime-level compliance with the \textit{DAMPS\_MMHCL\_Training\_Speedup\_Guide\_EN}
+sits at approximately \textbf{85--90\%}.
+
+\section{What Has Been Implemented Correctly}
+The following speedup items from the guide are already wired in correctly and are
+visible in the latest commit of the repository:
+
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+    \item \cmark\ \textbf{cuFFT plan-cache lockdown} \\
+          \texttt{torch.backends.cuda.cufft\_plan\_cache[idx].max\_size = 1} is set
+          at startup, preventing plan-cache memory leaks.
+    \item \cmark\ \textbf{Orthonormal rFFT/irFFT} \\
+          \texttt{torch.fft.rfft} and \texttt{torch.fft.irfft} are invoked with
+          \texttt{norm="ortho"}, exactly as recommended for the $d{=}64$ embeddings.
+    \item \cmark\ \textbf{Dual-path KNN with FAISS-GPU fallback} \\
+          \texttt{DualPathKNN} is parameterised with both
+          \texttt{faiss\_threshold} and \texttt{faiss\_use\_gpu} arguments inside
+          \texttt{train.py}.
+    \item \cmark\ \textbf{\texttt{torch.compile} on the DAMPS submodule} \\
+          The forward path of the DAMPS module is compiled using
+          \texttt{mode="reduce-overhead"} and \texttt{dynamic=True}, while the
+          K-NN rebuild step is correctly left uncompiled (matching the caveat
+          in the speedup guide).
+    \item \cmark\ \textbf{bfloat16 mixed precision via \texttt{torch.autocast}} \\
+          The training loop uses
+          \texttt{torch.amp.autocast(device\_type=..., dtype=torch.bfloat16, enabled=use\_amp)}
+          without a \texttt{GradScaler}, which is the correct pattern for bf16.
+    \item \cmark\ \textbf{Optuna TPE Bayesian HPO} \\
+          \texttt{scripts/run\_optuna\_hpo.py} is present and ready to be invoked.
+    \item \cmark\ \textbf{wandb Sweeps integration} \\
+          Both \texttt{scripts/run\_wandb\_sweep.py} and
+          \texttt{scripts/wandb\_sweep.yaml} exist in the repository.
+    \item \cmark\ \textbf{Paired $t$-test via \texttt{scipy.stats.ttest\_rel}} \\
+          Implemented in \texttt{scripts/paired\_ttest.py}.
+    \item \cmark\ \textbf{Permutation-FFT aggregator} \\
+          \texttt{scripts/\_aggregate\_permutation\_fft.py} is in place, paired
+          with notebook cell~5.5.
+\end{itemize}
+
+\section{Three Blocking Issues Preventing Full Compliance}
+
+\subsection{The notebook does not enable \texttt{torch.compile}}
+\texttt{train.py} already exposes the command-line flags
+\texttt{-{}-torch\_compile\_mode} and \texttt{-{}-torch\_compile\_dynamic}, but the
+notebook does not pass them into the subprocess command list. As a result, the
+25--35\% forward-pass speedup from \texttt{torch.compile} is \textbf{not actually
+activated at runtime}, even though the supporting code is fully present.
+
+\textbf{Fix.} Append the following two key/value pairs to the \texttt{cmd} list
+that launches \texttt{train.py} from the notebook:
+
+\begin{lstlisting}
+"--torch_compile_mode", "reduce-overhead",
+"--torch_compile_dynamic", "1",
+\end{lstlisting}
+
+\subsection{The notebook does not pass \texttt{-{}-faiss\_use\_gpu 1}}
+The notebook currently passes only \texttt{-{}-faiss\_threshold 60000}, but never
+\texttt{-{}-faiss\_use\_gpu 1}. For the Amazon Clothing dataset
+($N{=}23{,}033 < 60\text{K}$) this has no practical impact, because the chunked
+PyTorch path is selected anyway. However, when scaling up to a larger dataset,
+the FAISS-GPU fallback will silently remain disabled.
+
+\textbf{Fix.} Add the GPU FAISS flag to the notebook \texttt{cmd} list as well:
+
+\begin{lstlisting}
+"--faiss_use_gpu", "1",
+\end{lstlisting}
+
+\subsection{\texttt{n\_runs = 3} instead of \texttt{10}}
+The notebook is currently configured with \texttt{n\_runs = 3}, which violates the
+statistical-reliability requirement shared by both the architecture spec
+(\S4) and the Speedup Guide (\S8): final results must be reported across
+\textbf{10 seeds}, with confidence intervals and paired $t$-tests.
+
+\textbf{Fix.} Update the notebook constant to:
+
+\begin{lstlisting}
+n_runs: int = 10
+\end{lstlisting}
+
+\section{Optional Items (Safe to Skip)}
+
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+    \item \info\ \textbf{\texttt{torch\_geometric.nn.HypergraphConv} (\S3)} ---
+          The repository still uses a custom HGCN implementation. Adopting the
+          PyG operator could unlock an additional 25--35\% forward-pass speedup,
+          but skipping it does \emph{not} violate the architecture spec.
+    \item \info\ \textbf{\texttt{einops} (\S10)} ---
+          A pure readability improvement; it has no measurable effect on runtime
+          and can safely be omitted.
+    \item \info\ \textbf{\texttt{scipy.stats.vonmises} (\S5)} ---
+          Not used. The current GPU-vectorised implementation
+          $\hat\theta_c=\operatorname{atan2}\!\bigl(\sum\sin R_i,\sum\cos R_i\bigr)$
+          is in fact \emph{faster} than the CPU off-loaded path suggested by the
+          guide, because it avoids CPU--GPU synchronisation. This deviation is a
+          legitimate, beneficial improvement.
+\end{itemize}
+
+\section{Compliance Summary}
+
+\begin{longtable}{|p{8.4cm}|c|}
+\hline
+\textbf{Speedup Guide Item} & \textbf{Status}\\
+\hline
+\endhead
+\hline
+\textbf{Speedup Guide Item} & \textbf{Status}\\
+\hline
+\endfoot
+\hline
+\endlastfoot
+cuFFT plan-cache lock                                      & \cmark \\
+\hline
+\texttt{torch.fft.rfft} / \texttt{irfft} (\texttt{norm="ortho"}) & \cmark \\
+\hline
+Dual-path KNN + FAISS-GPU (code level)                     & \cmark \\
+\hline
+Dual-path KNN + FAISS-GPU (notebook flag)                  & \warn \\
+\hline
+\texttt{torch.compile} on DAMPS / HGCN (code level)        & \cmark \\
+\hline
+\texttt{torch.compile} (notebook flag)                     & \warn \\
+\hline
+PyG \texttt{HypergraphConv}                                & \xmark\ (optional) \\
+\hline
+von Mises \texttt{atan2}-based MLE                         & \cmark\ (better than guide) \\
+\hline
+Optuna TPE HPO                                             & \cmark \\
+\hline
+wandb Sweeps                                               & \cmark \\
+\hline
+\texttt{scipy.stats.ttest\_rel}                            & \cmark \\
+\hline
+bfloat16 \texttt{torch.autocast} (no \texttt{GradScaler})  & \cmark \\
+\hline
+\texttt{einops}                                            & \xmark\ (optional) \\
+\hline
+Permutation-FFT ablation                                   & \cmark \\
+\hline
+10 seeds + CI + paired $t$-test                            & \warn \\
+\hline
+\end{longtable}
+
+\section{Conclusion}
+Once the three blocking issues above are patched --- and most importantly,
+once \texttt{torch.compile} is actually activated from the notebook --- the
+implementation will reach \textbf{full runtime-level compliance} with the
+\textit{DAMPS\_MMHCL\_Training\_Speedup\_Guide\_EN}.
+
+\end{document}

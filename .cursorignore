@@ -1,0 +1,96 @@
+﻿# .cursorignore — DAMPS_upgrade_for_MMHCL_randoms_Amazon_Clothing
+# Cursor sẽ không đọc / index các paths này vào context AI
+
+# ============================================================
+# UNPUBLISHED RESEARCH RESULTS — không để AI leak ra ngoài
+# ============================================================
+
+# Ablation & experiment result summaries (chưa publish)
+Clothing/phase1_*.json
+Clothing/MM/sum_*.txt
+ANALYSIS_RESULTS_DISCREPANCY.md
+HYPERPARAMETER_UPDATES_SUMMARY.md
+WANDB_ANALYSIS_AND_OPTIMIZATION.md
+WANDB_INTEGRATION_SUMMARY.md
+TRAINING_STATUS.md
+
+# Kết quả seed experiments (file txt tiếng Việt)
+*.txt
+
+# ============================================================
+# TRAINING ARTIFACTS & CHECKPOINTS
+# ============================================================
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.npy
+*.npz
+saved_models/
+checkpoints/
+
+# ============================================================
+# EXPERIMENT TRACKING & LOGS
+# ============================================================
+wandb/
+codes/wandb/
+MMHCL_DAMPS_Project/wandb/
+log/
+mlruns/
+runs/
+
+# ============================================================
+# DATASET PAYLOADS (large files, downloaded separately)
+# ============================================================
+data/
+
+# ============================================================
+# JUPYTER NOTEBOOKS (có thể chứa output cells nhạy cảm)
+# ============================================================
+*.ipynb
+.ipynb_checkpoints/
+
+# ============================================================
+# CREDENTIALS & API KEYS
+# ============================================================
+.env
+.env.*
+secrets/
+*.key
+*.pem
+config/production.json
+
+# ============================================================
+# MONITORING & STATUS SCRIPTS OUTPUT
+# ============================================================
+check_training_status.py
+monitor_training.py
+quick_status.py
+TRAINING_STATUS.md
+README_MONITORING.md
+
+# ============================================================
+# BUILD / CACHE
+# ============================================================
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+.venv/
+venv/
+
+# ============================================================
+# OS METADATA
+# ============================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============================================================
+# DOCUMENTS (PDF, LaTeX)
+# ============================================================
+*.pdf
+*.tex
+*.xlsx
+*.csv

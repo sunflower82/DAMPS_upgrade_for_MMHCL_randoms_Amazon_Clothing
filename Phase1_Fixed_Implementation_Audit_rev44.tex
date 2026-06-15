@@ -1,0 +1,202 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{listings}
+\usepackage{mdframed}
+\usepackage{pifont}
+
+\newcommand{\cmark}{\ding{51}}
+\newcommand{\xmark}{\ding{55}}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!60!black,
+    urlcolor=blue!60!black,
+    citecolor=blue!60!black
+}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{pystyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=4,
+    language=Python
+}
+\lstset{style=pystyle}
+
+\titleformat{\section}{\normalfont\Large\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries}{\thesubsection}{1em}{}
+
+\title{\textbf{Phase 1 Implementation Audit\\Revision 44 Blueprint vs.\ Jupyter Notebook}}
+\author{Compliance Verification Report}
+\date{May 3, 2026}
+
+\begin{document}
+\maketitle
+
+\section*{Overall Verdict}
+
+\begin{mdframed}[backgroundcolor=backcolour, linecolor=red!60!black, linewidth=1pt]
+\textbf{\xmark{} Document spec is 100\% compliant, but the ACTUAL code in the notebook is $\sim$0\% compliant with Phase 1.}
+
+The \texttt{.tex}/\texttt{.pdf} blueprint (revision 44) now contains all 5 required fixes, but the attached Jupyter notebook still runs the \textbf{revision 42 configuration verbatim} --- none of the three Phase 1 P0 actions have been switched on in code.
+\end{mdframed}
+
+\section{Critical Findings}
+
+\subsection*{Finding 1 \xmark{} --- $\tau$ is still the old learnable value, NOT static $\tau = 0.3$}
+
+The notebook passes \texttt{temperature = 0.1} and the comment explicitly says ``initialisation of the learnable tau (Revision 9 spec)''. There is no \texttt{--temperature 0.3} flag and no \texttt{--temperature-mode static} flag. The training log's \texttt{tau\_final} is still being parsed as a drifting value, confirming it is still learnable.
+
+\paragraph{Evidence:}
+\begin{lstlisting}
+temperature: float = 0.1  # initialisation of the learnable tau
+                          # (Revision 9 spec, Section 3.1)
+\end{lstlisting}
+
+\paragraph{Required change:}
+\begin{lstlisting}
+temperature: float = 0.3                  # Phase 1: static anchor
+learnable_temperature: int = 0            # NEW FLAG -- force static
+\end{lstlisting}
+
+On the CLI side, add \texttt{--learnable-temperature 0} (or whatever flag \texttt{train.py} exposes). If \texttt{train.py} does not expose such a flag yet, the repository's \texttt{model.py} must be patched so \texttt{self.tau} becomes either \texttt{nn.Parameter(torch.tensor(0.3), requires\_grad=False)} or a plain buffer.
+
+\subsection*{Finding 2 \xmark{} --- AVRF is STILL ON (\texttt{damps\_avrf = 1})}
+
+The notebook sets \texttt{dampsavrf: int = 1  \# Logit-clipped Wiener gate}. Phase 1 action \#3 explicitly requires AVRF \textbf{disabled} (\texttt{--damps-avrf 0}). This is the single most consequential miss --- the entire rationale for the Phase 1 combined +5\%\textasciitilde{}8\% gain depends on this flag being flipped.
+
+\paragraph{Required change:}
+\begin{lstlisting}
+dampsavrf: int = 0     # Phase 1: AVRF ablation OFF
+\end{lstlisting}
+
+\subsection*{Finding 3 \textcolor{orange}{\textbf{!}} --- Eval protocol audit is NOT documented in the notebook}
+
+The spec demands a 7-point audit: (i) 5-core, (ii) split ratio, (iii) all-ranking vs.\ sampled, (iv) NDCG $\log_2$ convention, (v) ID remapping, (vi) popularity filtering, (vii) sort stability. The notebook contains \textbf{zero audit evidence} --- no assertions, no comparison prints against MMHCL reference values, and no printed confirmation that each of the 7 items was checked.
+
+\paragraph{Required addition --- insert a new cell before training:}
+\begin{lstlisting}
+# === Phase 1 Item #1: Eval Protocol Audit ===
+from damps.data_utils import load_clothing_split
+split = load_clothing_split(DATADIR)
+assert split['core_filter']   == 5,                  "FAIL (i) 5-core"
+assert split['train_ratio']   == 0.8,                "FAIL (ii) split ratio"
+assert split['split_seed']    == 2023,               "FAIL (ii) split seed matches MMHCL"
+assert split['eval_mode']     == 'all_ranking',      "FAIL (iii) must be all-ranking"
+assert split['ndcg_log_base'] == 'log2_i_plus_2',    "FAIL (iv) NDCG convention"
+assert split['id_remap_consistent'],                 "FAIL (v) ID remap"
+assert split['mask_train_at_test'],                  "FAIL (vi) popularity filter"
+assert split['stable_sort'],                         "FAIL (vii) tie stability"
+print("OK  All 7 eval-protocol checks match MMHCL reference.")
+\end{lstlisting}
+
+\subsection*{Finding 4 \xmark{} --- Combined fix variant not scheduled}
+
+The stop-gate in Section 5.2 of revision 44 requires \textbf{4 variants}: (a) anchor, (b) $+\tau = 0.3$, (c) + AVRF off, (d) combined. The notebook only runs a single configuration $\times$ 10 seeds. It is missing the loop over 4 configurations.
+
+\paragraph{Required change:} Wrap the seed loop in an outer configuration loop:
+\begin{lstlisting}
+phase1_variants = {
+    'anchor'   : {'temperature': 0.1, 'dampsavrf': 1, 'learnable_temp': 1},
+    'tau03'    : {'temperature': 0.3, 'dampsavrf': 1, 'learnable_temp': 0},
+    'avrf_off' : {'temperature': 0.1, 'dampsavrf': 0, 'learnable_temp': 1},
+    'combined' : {'temperature': 0.3, 'dampsavrf': 0, 'learnable_temp': 0},  # recommended
+}
+for variant_name, overrides in phase1_variants.items():
+    for seed in seeds:   # 10 seeds each
+        ...
+\end{lstlisting}
+
+\subsection*{Finding 5 \xmark{} --- Paired $t$-test + Bonferroni script not invoked}
+
+Section 5.2 mandates \texttt{scripts/paired\_t\_test.py} with Bonferroni correction when more than one variant is compared against the anchor. The notebook's ``Results Summary'' cell only reports mean $\pm$ std; it never runs a paired $t$-test against the anchor. The header text ``must average across 10 seeds with 95\% CIs and paired $t$-tests vs.\ the MMHCL baseline (\texttt{scripts/paired\_t\_test.py})'' confirms the script exists in the repository but the notebook does not call it.
+
+\paragraph{Required addition --- new cell after results aggregation:}
+\begin{lstlisting}
+subprocess.run([PYTHON_EXE, "scripts/paired_t_test.py",
+                "--anchor",   "..dataset/anchor_summary.json",
+                "--variants", "..dataset/tau03_summary.json",
+                              "..dataset/avrf_off_summary.json",
+                              "..dataset/combined_summary.json",
+                "--bonferroni", "1",
+                "--alpha",      "0.05"], check=True)
+\end{lstlisting}
+
+\subsection*{Finding 6 \textcolor{orange}{\textbf{!}} --- Notebook header still references ``Revision 9 / revision42.tex''}
+
+The notebook's Markdown header cell says ``follows the Revision 9 (100\% Compliance Check --- Final Lock) architecture spec (see \texttt{DAMPS\_to\_MMHCL\_architecture\_revision42.tex/.pdf})''. It should now reference revision 44. This is cosmetic, but will confuse any reviewer who opens the notebook expecting revision 44 logic.
+
+\section{Compliance Scorecard}
+
+\renewcommand{\arraystretch}{1.35}
+\begin{longtable}{|p{7.5cm}|p{2.3cm}|p{3.5cm}|p{2cm}|}
+\hline
+\textbf{Phase 1 Requirement} & \textbf{Document (rev44)} & \textbf{Notebook / Code} & \textbf{Status} \\
+\hline
+\endhead
+Scope restricted to Phase 1                         & \cmark{}           & \cmark{}                                       & Pass \\ \hline
+Action \#1 --- 7-point eval audit executed          & \cmark{} specified & \xmark{} no audit cell                         & \textbf{FAIL} \\ \hline
+Action \#2 --- Static $\tau = 0.3$                  & \cmark{} specified & \xmark{} \texttt{temperature}=0.1, still learnable & \textbf{FAIL} \\ \hline
+Action \#3 --- AVRF disabled                        & \cmark{} specified & \xmark{} \texttt{dampsavrf}=1                  & \textbf{FAIL} \\ \hline
+Quantitative stop-gate (0.0870 / 0.0900)            & \cmark{}           & \xmark{} not checked in code                   & \textbf{FAIL} \\ \hline
+4 variants $\times$ 10 seeds                        & \cmark{}           & \xmark{} 1 variant $\times$ 10 seeds           & \textbf{FAIL} \\ \hline
+Paired $t$-test + Bonferroni                        & \cmark{}           & \xmark{} not invoked                           & \textbf{FAIL} \\ \hline
+Anchor numbers (0.0786 / 0.0383)                    & \cmark{}           & \textcolor{orange}{\textbf{!}} only \texttt{recall20}=0.0881 paper value hardcoded & Partial \\ \hline
+Notebook header references rev44                    & n/a                & \xmark{} says rev42 / Revision 9               & Cosmetic \\ \hline
+\end{longtable}
+
+\section{Minimum Patch to Reach 100\% Compliance}
+
+\paragraph{Single most important change.} In the notebook's training-config cell, three lines suffice to flip both experimental interventions:
+
+\begin{lstlisting}
+temperature:    float = 0.3   # was 0.1 (Phase 1 static tau)
+dampsavrf:      int   = 0     # was 1   (Phase 1 AVRF ablation)
+# plus a new CLI arg to freeze tau, e.g.:
+learnable_temp: int   = 0     # new; forces static tau in train.py
+\end{lstlisting}
+
+\paragraph{Then add the three new cells above:}
+\begin{enumerate}[leftmargin=*]
+    \item Eval-protocol audit assertions (before training).
+    \item Outer configuration loop over the 4 Phase 1 variants.
+    \item \texttt{scripts/paired\_t\_test.py} invocation with Bonferroni after aggregation.
+\end{enumerate}
+
+\paragraph{Why this matters.} Without these edits, running the notebook as-is will simply reproduce the revision-42 mean of $0.0786 \pm 0.0016$ a second time --- Phase 1 will yield \textbf{zero} of its projected +5\%\textasciitilde{}8\% gain because \emph{neither} of its two experimental interventions ($\tau = 0.3$, AVRF off) is actually active in the code path.
+
+\section{Conclusion}
+
+\begin{mdframed}[backgroundcolor=backcolour, linecolor=codegray, linewidth=0.5pt]
+The blueprint (revision 44) is compliant; the implementation (notebook) is not. Please apply the six edits above before launching the 10-seed Phase 1 campaign --- otherwise the runs will consume GPU hours without testing any of the Phase 1 hypotheses.
+\end{mdframed}
+
+\end{document}

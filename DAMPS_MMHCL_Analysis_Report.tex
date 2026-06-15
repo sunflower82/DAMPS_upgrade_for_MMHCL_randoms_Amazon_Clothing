@@ -1,0 +1,729 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+
+% --- Core Packages ---
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage[a4paper,top=1in,bottom=1in,left=1in,right=1in]{geometry}
+\usepackage{setspace}
+\setstretch{1.15}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{parskip}
+\usepackage{titlesec}
+\usepackage{multirow}
+\usepackage{tabularx}
+\usepackage{microtype}
+\usepackage{fancyhdr}
+\usepackage{colortbl}
+\setlength{\emergencystretch}{3em}
+\sloppy
+
+% --- Color Definitions ---
+\definecolor{codegreen}{rgb}{0,0.55,0}
+\definecolor{codegray}{rgb}{0.45,0.45,0.45}
+\definecolor{codepurple}{rgb}{0.50,0,0.75}
+\definecolor{backcolour}{rgb}{0.96,0.96,0.94}
+\definecolor{linkblue}{rgb}{0.08,0.30,0.60}
+\definecolor{agreegreen}{rgb}{0.0,0.55,0.27}
+\definecolor{disagreered}{rgb}{0.75,0.12,0.12}
+\definecolor{warnyellow}{rgb}{0.80,0.50,0.0}
+\definecolor{tabbg}{rgb}{0.95,0.97,1.0}
+\definecolor{tabhead}{rgb}{0.88,0.91,0.95}
+
+% --- Hyperlinks ---
+\hypersetup{
+  colorlinks=true,
+  linkcolor=linkblue,
+  citecolor=linkblue,
+  urlcolor=linkblue,
+  pdftitle={DAMPS-MMHCL Diagnostic Analysis Report --- Amazon Clothing},
+  bookmarksnumbered=true
+}
+
+% --- Code Style ---
+\lstdefinestyle{mystyle}{
+  backgroundcolor=\color{backcolour},
+  commentstyle=\color{codegreen},
+  keywordstyle=\color{blue},
+  numberstyle=\tiny\color{codegray},
+  stringstyle=\color{codepurple},
+  basicstyle=\ttfamily\small,
+  breakatwhitespace=false,
+  breaklines=true,
+  captionpos=b,
+  keepspaces=true,
+  numbers=none,
+  showspaces=false,
+  showstringspaces=false,
+  showtabs=false,
+  tabsize=4,
+  frame=single,
+  rulecolor=\color{codegray}
+}
+\lstset{style=mystyle}
+
+% --- Section Formatting ---
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.6em}{}[\titlerule]
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection.}{0.5em}{}
+\titleformat{\subsubsection}{\normalsize\itshape\bfseries}{\thesubsubsection.}{0.4em}{}
+
+% --- Checkmark / Cross Commands ---
+\newcommand{\YES}{\textcolor{agreegreen}{\textbf{\checkmark}}}
+\newcommand{\NO}{\textcolor{disagreered}{\textbf{$\times$}}}
+
+% --- Page Style ---
+\setlength{\headheight}{15pt}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textit{DAMPS-MMHCL Diagnostic Analysis Report}}
+\fancyhead[R]{\small\textit{Amazon Clothing Dataset}}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\arrayrulecolor{black!55}
+
+\begin{document}
+
+% ===================================================================
+%  TITLE PAGE
+% ===================================================================
+\thispagestyle{empty}
+\begin{center}
+  \vspace*{1.2cm}
+  {\LARGE\bfseries DAMPS-MMHCL Diagnostic Analysis Report}\\[0.9em]
+  \rule{0.60\textwidth}{0.4pt}\\[0.9em]
+  {\large\itshape Amazon Clothing Dataset --- Performance Gap Investigation}\\[1.8em]
+  {\normalsize
+    Synthesised Multi-Model Analysis\\[0.5em]
+    \textit{GPT-5.5 Thinking\enspace$\cdot$\enspace
+            Claude Opus 4.7 Thinking\enspace$\cdot$\enspace
+            Gemini 3.1 Pro Thinking}
+  }\\[2.5em]
+  \begin{tabular}{@{}r>{\small}p{10cm}@{}}
+    \textbf{Repository:}   &
+      \url{https://github.com/sunflower82/DAMPS_upgrade_for_MMHCL_randoms_Amazon_Clothing}\\[0.6em]
+    \textbf{Architecture:} &
+      \texttt{DAMPS\_to\_MMHCL\_architecture\_revision42.tex} (Revision~9)\\[0.6em]
+    \textbf{Date:}         & May 2026
+  \end{tabular}\\[2.5em]
+  \rule{0.60\textwidth}{0.4pt}
+\end{center}
+
+\newpage
+\begin{abstract}
+\noindent
+This report investigates a systematic 10.7\% Recall@20 deficit observed
+when integrating DAMPS into the MMHCL framework on the Amazon Clothing
+dataset ($0.0786$ vs.\ $0.0881$ paper baseline, averaged over 10 random
+seeds).  NDCG@20 and Precision@20 degrade by only 2.9\% and 2.6\%
+respectively, indicating a \emph{candidate coverage failure} rather than
+a ranking failure.  Three frontier reasoning models independently converge
+on this diagnosis.  Six ranked root-cause hypotheses are presented---from
+an evaluation protocol mismatch (highest impact, zero compute cost to
+verify) to a learnable temperature $\tau$ stuck at a local minimum, AVRF
+spectral over-filtering, and a hypergraph NNZ explosion---together with a
+prioritised six-configuration ablation grid for efficient diagnosis.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ===================================================================
+\section{Executive Summary}
+% ===================================================================
+
+Experimental results across 10 random seeds show that the current
+DAMPS-MMHCL integration achieves $\text{Recall@20} = 0.0786 \pm 0.0016$,
+which is \textbf{10.7\%} below the original MMHCL paper baseline of
+$0.0881$.  By contrast, NDCG@20 drops only 2.9\% ($0.0383$ vs.\
+$0.0394$) and Precision@20 drops only 2.6\% ($0.00438$ vs.\ $0.0045$).
+This asymmetric degradation pattern --- Recall collapses while ranking
+metrics remain nearly intact --- is a strong diagnostic signal that the
+model is \emph{narrowing candidate coverage} rather than mis-ordering
+items.  Three independent frontier reasoning models all converge on this
+interpretation, though they disagree on the primary root cause.
+
+% ===================================================================
+\section{Consensus Findings: High-Confidence Results}
+% ===================================================================
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{3.7cm}|
+                  >{\centering\arraybackslash}p{1.5cm}|>{\centering\arraybackslash}p{1.5cm}|>{\centering\arraybackslash}p{1.5cm}|
+                  >{\raggedright\arraybackslash}p{3.7cm}|}
+\caption{Findings unanimously confirmed by all three reasoning models.}
+\label{tab:agreement}\\
+\hline
+\rowcolor{tabhead}\textbf{Finding} & \textbf{GPT} & \textbf{Claude} & \textbf{Gemini} & \textbf{Evidence / Source} \\
+\hline
+\endfirsthead
+\multicolumn{5}{c}{\textit{(continued from previous page)}}\\
+\hline
+\rowcolor{tabhead}\textbf{Finding} & \textbf{GPT} & \textbf{Claude} & \textbf{Gemini} & \textbf{Evidence / Source}\\
+\hline
+\endhead
+\hline
+\endfoot
+
+Recall@20 drops $\approx$10.7\% vs.\ original MMHCL
+($0.0786$ vs.\ $0.0881$)
+  & \YES & \YES & \YES
+  & \path{DAMPS_MMHCL_Clothing_Results_Local.xlsx}, Paper Comparison sheet \\\hline
+
+NDCG@20 drops less ($\approx$2.9\%,
+$0.0383$ vs.\ $0.0394$)
+  & \YES & \YES & \YES
+  & Same Excel file, Summary Statistics sheet \\\hline
+
+Training curve plateaus early
+($\approx$epoch 150--170) and does not
+recover further
+  & \YES & \YES & \YES
+  & \texttt{recall-20.csv}, peak $\approx 0.0805$ at
+    step~300, then declining \\\hline
+
+DAMPS augmentation may disrupt
+the hypergraph structure $\to$ reduces
+recall; Soft Residual-Routing
+$\alpha = 0.1$ may be mis-calibrated
+  & \YES & \YES & \YES
+  & \path{DAMPS_to_MMHCL_architecture_revision42.tex}, Section~3 \\\hline
+
+Learnable temperature $\tau$ converges
+to $0.0909$ (near its init value~$0.1$)
+across all 10 seeds; may constrain
+embedding diversity
+  & \YES & \YES & \YES
+  & \path{DAMPS_MMHCL_Clothing_Results_Local.xlsx},
+    column \texttt{tau\_final} \\\hline
+
+Seed-to-seed stability is acceptable
+($\sigma = 0.0016$ for Recall@20)
+  & \YES & \YES & \YES
+  & Excel Summary Statistics sheet \\\hline
+
+\hline
+\end{longtable}
+
+\subsection{Quantitative Comparison with Original MMHCL}
+
+Table~\ref{tab:metric_comparison} presents the full numerical comparison
+between the DAMPS-MMHCL runs (10 seeds) and the MMHCL paper baseline.
+
+\begin{table}[htbp]
+\centering
+\caption{Metric comparison: DAMPS-MMHCL vs.\ original MMHCL on Amazon Clothing.
+Source: \texttt{DAMPS\_MMHCL\_Clothing\_Results\_Local.xlsx}.}
+\label{tab:metric_comparison}
+\begin{tabular}{|>{\raggedright\arraybackslash}p{2.3cm}|>{\centering\arraybackslash}p{3.2cm}|>{\centering\arraybackslash}p{2.0cm}|>{\centering\arraybackslash}p{1.8cm}|>{\centering\arraybackslash}p{1.8cm}|}
+\hline
+\rowcolor{tabhead}\textbf{Metric} & \textbf{DAMPS-MMHCL (mean $\pm$ std)} & \textbf{MMHCL Paper} & \textbf{$\Delta$ abs} & \textbf{$\Delta$ rel (\%)} \\
+\hline
+Recall@20    & $0.07864 \pm 0.00159$ & $0.0881$ & $-0.00946$ & $-10.73$ \\\hline
+NDCG@20      & $0.03827 \pm 0.00078$ & $0.0394$ & $-0.00113$ & $-2.88$  \\\hline
+Prec@20      & $0.00438 \pm 0.00008$ & $0.0045$ & $-0.00012$ & $-2.64$  \\\hline
+\end{tabular}
+\end{table}
+
+The asymmetry between $\Delta\text{Recall@20}$ ($-10.73\%$) and
+$\Delta\text{NDCG@20}$ ($-2.88\%$) is the central diagnostic signal in
+this report.  A system that scores well on NDCG but poorly on Recall is
+providing \emph{high-quality rankings within a diminished candidate pool}.
+This implicates the \textbf{candidate generation stage} (hypergraph
+neighbourhood, embedding diversity) rather than the ranking stage.
+
+\subsection{Individual Seed Results}
+
+\begin{table}[htbp]
+\centering
+\caption{Per-seed results. Source: \texttt{DAMPS\_MMHCL\_Clothing\_Results\_Local.xlsx}, Individual Results sheet.}
+\label{tab:per_seed}
+\begin{tabular}{|r|r|c|c|c|}
+\hline
+\rowcolor{tabhead}\textbf{Run} & \textbf{Seed} & \textbf{Recall@20} & \textbf{Precision@20} & \textbf{NDCG@20} \\
+\hline
+1  & 1303944351 & 0.07904 & 0.004398 & 0.038456 \\\hline
+2  & 1945848931 & 0.08119 & 0.004510 & 0.038809 \\\hline
+3  & 1338264894 & 0.07834 & 0.004362 & 0.036728 \\\hline
+4  & 2131176512 & 0.07993 & 0.004449 & 0.038843 \\\hline
+5  & 444520708  & 0.07720 & 0.004321 & 0.037912 \\\hline
+6  & 1691295048 & 0.08045 & 0.004479 & 0.039255 \\\hline
+7  & 27086229   & 0.07830 & 0.004367 & 0.039236 \\\hline
+8  & 1691374281 & 0.07760 & 0.004311 & 0.037648 \\\hline
+9  & 90487858   & 0.07546 & 0.004224 & 0.037474 \\\hline
+10 & 156097670  & 0.07893 & 0.004393 & 0.038298 \\\hline
+\textbf{Mean} & --- & \textbf{0.07864} & \textbf{0.004381} & \textbf{0.038266} \\\hline
+\textbf{Std}  & --- & 0.00159 & 0.000081 & 0.000780 \\\hline
+\textbf{Min}  & --- & 0.07546 & 0.004224 & 0.036728 \\\hline
+\textbf{Max}  & --- & 0.08119 & 0.004510 & 0.039255 \\\hline
+\end{tabular}
+\end{table}
+
+No seed can be classified as an outlier: the IQR for Recall@20 is
+$\approx 0.0028$, and the range (0.07546--0.08119) never approaches the
+paper baseline of 0.0881.  This confirms the deficit is \textbf{systematic},
+not due to unlucky initialisation.
+
+% ===================================================================
+\section{Training Curve Analysis (Seed 156097670)}
+% ===================================================================
+
+The five WandB CSV files (\texttt{recall-20.csv}, \texttt{recall-10.csv},
+\texttt{ndcg-20.csv}, \texttt{hit-20.csv}, \texttt{precision-20.csv})
+log validation metrics at evaluation steps for seed 156097670.
+
+\subsection{Key Observations}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Recall@20} rises sharply from step~5 ($0.0518$) to
+        step~300 ($0.0805$), then oscillates and declines to $0.0774$
+        at step~364.  Peak step: \textbf{300} ($\approx$ epoch 214).
+  \item \textbf{NDCG@20} peaks at step~285 ($0.0371$), slightly ahead
+        of the Recall peak --- consistent with the model optimising
+        ranking quality before coverage.
+  \item \textbf{HitRate@20} mirrors Recall@20 closely; peak at step~300
+        ($0.0830$).
+  \item \textbf{Precision@20} peaks around step~300 ($0.00418$) and
+        also plateaus.
+  \item \textbf{Recall@10} continues to show moderate gains beyond
+        step~220, suggesting the model could still improve at shorter
+        list lengths.
+  \item \textbf{Plateau onset}: visible from $\approx$step~162
+        (epoch~115), $\approx$150 epochs before peak --- consistent
+        with early saturation of the contrastive objective.
+  \item \textbf{No divergence or instability}: the oscillation amplitude
+        post-plateau is $< 0.003$ for Recall@20, indicating stable
+        training dynamics.
+\end{itemize}
+
+\subsection{Early Stopping Assessment}
+
+With \texttt{early\_stopping\_patience = 30} and
+\texttt{early\_stopping\_min\_epochs = 75}, the model likely stopped
+around step 364--385.  The best checkpoint at step 300 was correctly
+captured.  \textbf{The problem is not early stopping prematurely ---
+the model reached its capacity ceiling at $\approx 0.0805$, well below
+the 0.0881 target.}
+
+% ===================================================================
+\section{Areas of Divergence Between Models}
+% ===================================================================
+
+\begin{table}[htbp]
+\centering
+\caption{Points of disagreement among the three reasoning models.}
+\label{tab:disagreement}
+\begin{tabular}{|>{\raggedright\arraybackslash}p{3.0cm}|
+                >{\raggedright\arraybackslash}p{3.5cm}|
+                >{\raggedright\arraybackslash}p{3.5cm}|
+                >{\raggedright\arraybackslash}p{3.5cm}|}
+\hline
+\rowcolor{tabhead}\textbf{Topic} & \textbf{GPT-5.5 Thinking} & \textbf{Claude Opus 4.7} & \textbf{Gemini 3.1 Pro} \\
+\hline
+Primary root cause \#1
+  & $\tau$ too low $\to$ collapse of embedding diversity
+  & DAMPS filter too aggressive, destroying hypergraph edges
+  & Early stopping + LR schedule halt training prematurely \\\hline
+
+Pattern~B rebuild ($R = 5$)
+  & Frequency is adequate; not a problem
+  & May cause instability in early epochs
+  & $R = 5$ is fine, but 10-epoch warmup is insufficient \\\hline
+
+First recommended fix
+  & Raise $\tau_{\text{init}}$ to $0.2$--$0.5$
+  & Reduce DAMPS strength ($\alpha \to 0.05$)
+  & Increase max epochs to 400+ with patience 50 \\\hline
+\end{tabular}
+\end{table}
+
+The disagreements arise from each model weighting different diagnostic
+signals:\ GPT-5.5 focuses on the $\tau$ numerical anomaly; Claude Opus
+focuses on architectural interactions; Gemini focuses on training dynamics.
+All three hypotheses should be tested in parallel (see Section~\ref{sec:recommendations}).
+
+% ===================================================================
+\section{Model-Specific Discoveries}
+% ===================================================================
+
+\begin{table}[htbp]
+\centering
+\caption{Novel findings specific to each reasoning model.}
+\label{tab:unique}
+\begin{tabular}{|>{\raggedright\arraybackslash}p{2.5cm}|
+                >{\raggedright\arraybackslash}p{5.5cm}|
+                >{\raggedright\arraybackslash}p{5.0cm}|}
+\hline
+\rowcolor{tabhead}\textbf{Model} & \textbf{Unique Finding} & \textbf{Why It Matters} \\
+\hline
+GPT-5.5 Thinking
+  & $\tau = 0.0909$ is identical across all 10 seeds, nearly unchanged
+    from \texttt{tau\_init = 0.1}, indicating the learnable temperature
+    is stuck in a local minimum.
+  & If $\tau$ does not learn, InfoNCE loss remains static and contrastive
+    learning fails to calibrate inter-embedding distances dynamically. \\\hline
+
+Claude Opus 4.7 Thinking
+  & \texttt{avg\_deg} $\approx 68$ in the Excel file versus the
+    expected K-NN setting \texttt{top-k = 5}.  Even accounting for
+    second-order hypergraph connectivity, the degree is suspiciously
+    high, suggesting a residual NNZ explosion in Pattern~B rebuilds.
+  & If the adjacency matrix accumulates non-zero entries across
+    rebuilds, the graph structure blurs, reducing the specificity of
+    collaborative signals and dropping Recall. \\\hline
+
+Gemini 3.1 Pro Thinking
+  & The large gap between $\Delta\text{Recall@20}$ ($-10.7\%$) and
+    $\Delta\text{Precision@20}$ ($-2.6\%$) implies the model ranks
+    \emph{known} high-quality items well but fails to surface a diverse
+    candidate pool.  DAMPS spectral filtering may be homogenising item
+    representations. &
+    Reduced candidate diversity is a known failure mode when contrastive
+    augmentation is too strong or the filter attenuates discriminative
+    frequency bins. \\\hline
+\end{tabular}
+\end{table}
+
+% ===================================================================
+\section{Architecture Delta: DAMPS vs.\ Original MMHCL}
+% ===================================================================
+
+\subsection{Summary of Modifications}
+
+Based on \texttt{DAMPS\_to\_MMHCL\_architecture\_revision42.tex}
+(Revision~9), the following components were integrated:
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Adaptive Phase Calibration (APC)}: Static metadata-driven
+        von~Mises estimation of per-category phase rotation $\hat{\phi}_c$;
+        eliminates dynamic $k$-means overhead.
+  \item \textbf{Adaptive Variance Regularisation Filter (AVRF)}: Wiener-inspired
+        frequency-domain shrinkage with learnable logit
+        $w_{m,f} \in [-2, 2]$; data-driven SNR prior initialisation.
+  \item \textbf{Inter-Modal Coherence Filter Residual (IMCF)}: Residual
+        modulation using ASC coherence coefficient; formulated as
+        $\mathbf{z}_i^m \leftarrow \mathbf{z}_i^m
+         + \gamma(\text{ASC}_i - \overline{\text{ASC}})\mathbf{z}_i^m$.
+  \item \textbf{Soft Residual-Routing} ($\alpha$-blend):
+        $\mathbf{h}_{\text{input}} = \mathbf{h}_{\text{raw}}
+         + \alpha \cdot \text{LayerNorm}(\mathbf{h}_{\text{cal}})$,
+        where $\alpha$ is initialised at $0.1$ and learnable.
+  \item \textbf{Pattern~B Scheduled Rebuild} ($R = 5$ epochs): Hypergraph
+        reconstructed every 5 epochs using calibrated features.
+  \item \textbf{Slim Momentum Encoder}: EMA smoothing applied to
+        $\mathbf{h}_{\text{cal}} \in \mathbb{R}^{64}$ only (not the
+        full 4096-dimensional visual table).
+  \item \textbf{Learnable InfoNCE Temperature}: $\tau$ initialised at
+        $0.1$; intended to adapt dynamically.
+  \item \textbf{Mixed Precision (BF16)}: Enabled via \texttt{use\_amp = True}.
+\end{enumerate}
+
+\subsection{Impact Assessment per Component}
+
+\begin{table}[htbp]
+\centering
+\caption{Estimated impact of each DAMPS component on Recall@20 and NDCG@20.
+\textbf{O} = observed from data; \textbf{H} = hypothesis to be tested.}
+\label{tab:impact}
+\begin{tabular}{|>{\raggedright\arraybackslash}p{3.5cm}|
+                >{\raggedright\arraybackslash}p{4.5cm}|
+                >{\raggedright\arraybackslash}p{4.5cm}|}
+\hline
+\rowcolor{tabhead}\textbf{Component} & \textbf{Impact on Recall@20} & \textbf{Impact on NDCG@20} \\
+\hline
+AVRF (spectral shrinkage)
+  & \textbf{H}: May over-attenuate discriminative bins
+    $\to$ uniform cosine similarity $\to$ wrong K-NN edges
+    $\to$ lower coverage.
+  & \textbf{H}: Moderate degradation; ranking within the
+    narrowed pool may still be coherent. \\\hline
+
+APC (phase rotation)
+  & \textbf{H}: Reduces cross-modal phase misalignment;
+    should help coverage if calibration is accurate.
+  & \textbf{H}: Positive or neutral effect. \\\hline
+
+IMCF (coherence modulation)
+  & \textbf{H}: Residual form limits attenuation; risk is
+    scaling error if $\overline{\text{ASC}}$ is mis-estimated.
+  & Likely neutral to positive if ASC is well-calibrated. \\\hline
+
+Soft Residual-Routing ($\alpha$)
+  & \textbf{O}: $\alpha_{\text{init}} = 0.1$ may be too small,
+    meaning DAMPS barely intervenes; or too large if the
+    learnable $\alpha$ overshoots.
+  & Tied to the degree of intervention: small $\alpha$ means
+    near-vanilla MMHCL embeddings. \\\hline
+
+Pattern~B Rebuild ($R = 5$)
+  & \textbf{H}: Stable connectivity if NNZ is controlled;
+    potentially causing density explosion (see avg\_deg anomaly).
+  & Hypergraph quality directly impacts propagation quality. \\\hline
+
+Learnable $\tau$
+  & \textbf{O}: $\tau_{\text{final}} = 0.0909$ across all seeds;
+    very low $\to$ sharp softmax $\to$ embedding collapse
+    $\to$ reduced coverage at top-20.
+  & Low $\tau$ can artificially inflate NDCG by concentrating
+    scores on a few high-confidence items. \\\hline
+
+Momentum Encoder (Slim)
+  & Stabilises hypergraph rebuilds; net positive for coverage.
+  & Stabilises contrastive targets; net positive. \\\hline
+\end{tabular}
+\end{table}
+
+% ===================================================================
+\section{Root Cause Hypotheses for Recall@20 Drop}
+% ===================================================================
+
+The following hypotheses are ranked by estimated plausibility based on
+the convergence of model opinions and numerical evidence.
+
+\subsubsection*{Hypothesis H1 (High Probability): Learnable $\tau$ Stuck
+at Local Minimum}
+
+\textbf{Evidence (observed)}: All 10 seeds converge to
+$\tau_{\text{final}} = 0.0909$, which deviates only $-9.1\%$ from the
+initialisation of $0.1$.  This near-zero shift over 200+ epochs is
+anomalous for a learnable scalar with gradient flow.
+
+\textbf{Mechanism}: A temperature of $\approx 0.09$ makes the InfoNCE
+softmax extremely sharp.  During contrastive training, the model focuses
+exclusively on hardest negatives, creating tightly clustered embeddings.
+In such a landscape, only the few nearest neighbours of each user
+receive high scores --- reducing the effective retrieval radius and
+suppressing Recall@20 while NDCG remains relatively stable.
+
+\textbf{Test}: Freeze $\tau$ at $\{0.2, 0.3, 0.5\}$ (three runs).
+Expected gain: $+3$--$5\%$ Recall@20.
+
+\subsubsection*{Hypothesis H2 (High Probability): AVRF Over-Filtering
+Discriminative Frequency Bins}
+
+\textbf{Evidence (observed)}: The AVRF logit initialisation uses a
+data-driven SNR prior clipped to $[-2, 2]$.  If the prior
+under-estimates intra-cluster variance (which occurs for sparse
+e-commerce data), the gate $\sigma(w_{m,f})$ can become uniformly
+small, attenuating features across all bins.
+
+\textbf{Mechanism}: Post-AVRF feature vectors become more similar across
+items.  Cosine similarity among all pairs converges toward a narrow
+range.  The K-NN hypergraph construction selects near-arbitrary
+neighbours, polluting the graph and degrading collaborative signal
+propagation.
+
+\textbf{Test}: Single ablation --- disable AVRF while keeping APC and
+IMCF active.  Expected gain: $+2$--$4\%$ Recall@20.
+
+\subsubsection*{Hypothesis H3 (Medium Probability): NNZ Explosion in
+Pattern~B Rebuild}
+
+\textbf{Evidence (observed)}: \texttt{avg\_deg} $\approx 68$ in the
+Excel log, versus a K-NN parameter \texttt{top-k = 5}.  Even with
+second-order hyperedge convolution $\mathbf{H}_{i2i}
+= \text{LN}(\bar{\mathbf{I}} \mathbf{W} \bar{\mathbf{I}}^\top)$,
+a degree of $68 / 5 = 13.6\times$ the sparsity target is suspicious.
+
+\textbf{Mechanism}: If EMA smoothing of the sparse adjacency accumulates
+NNZ entries across rebuild cycles, each node gains spurious edges,
+effectively oversmoothing item representations and degrading
+distinctiveness.
+
+\textbf{Test}: Log NNZ and avg\_deg at every Pattern~B rebuild; if NNZ
+increases monotonically, enforce hard re-sparsification after each
+rebuild.  Expected gain: $+2$--$3\%$ Recall@20.
+
+\subsubsection*{Hypothesis H4 (Medium Probability): Evaluation Protocol
+Mismatch}
+
+\textbf{Evidence (observational gap)}: The paper reports $0.0881$ but
+the implementation's best checkpoint is $0.0805$ --- a floor that
+cannot be reached regardless of training length.  Protocol differences
+(sampled negatives vs.\ full ranking, inclusive vs.\ exclusive $k$,
+seen-item filtering) can account for $0$--$10\%$ absolute differences.
+
+\textbf{Test}: Compare the evaluation loop in
+\texttt{codes/} with the original MMHCL repository
+(\url{https://github.com/Xu107/MMHCL}).  Priority: \textbf{check this
+first} as it requires no retraining.
+
+\subsubsection*{Hypothesis H5 (Medium Probability): Soft Residual-Routing
+$\alpha$ Mis-Calibrated}
+
+\textbf{Evidence (architectural)}: $\alpha_{\text{init}} = 0.1$ means the
+HGCN input is $\approx 90\%$ raw features and $\approx 10\%$ calibrated
+features.  If $\alpha$ does not learn to a meaningful value, DAMPS
+barely intervenes --- yet still adds noise through the LayerNorm path.
+
+\textbf{Test}: Sweep $\alpha \in \{0.3, 0.5, 0.7\}$ as static values.
+Expected gain: $\pm 2\%$ Recall@20 depending on direction.
+
+\subsubsection*{Hypothesis H6 (Lower Probability): Training Capacity
+Ceiling}
+
+\textbf{Evidence}: Peak Recall@20 for seed 156097670 is $0.0805$ at
+step~300 (recall-20.csv), with consistent behaviour across all 10 seeds
+(max = $0.08119$).  The model architecture uses
+\texttt{embedding\_dim = 64}, which may be insufficient for the Amazon
+Clothing dataset scale.
+
+\textbf{Test}: Extend training to 400 epochs with
+\texttt{patience = 50}.  Additionally, test \texttt{embedding\_dim = 128}.
+
+% ===================================================================
+\section{Recommendations}
+\label{sec:recommendations}
+% ===================================================================
+
+\subsection{Priority Action Table}
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{2.5cm}|
+                  >{\raggedright\arraybackslash}p{3.5cm}|
+                  >{\raggedright\arraybackslash}p{4.0cm}|
+                  >{\raggedright\arraybackslash}p{2.5cm}|}
+\caption{Recommended experiments ordered by expected impact and cost.}
+\label{tab:actions}\\
+\hline
+\rowcolor{tabhead}\textbf{Issue} & \textbf{Hypothesis} & \textbf{Experiment} & \textbf{Expected $\Delta$ Recall@20} \\
+\hline
+\endfirsthead
+\multicolumn{4}{c}{\textit{(continued)}}\\
+\hline
+\rowcolor{tabhead}\textbf{Issue} & \textbf{Hypothesis} & \textbf{Experiment} & \textbf{Expected $\Delta$}\\
+\hline
+\endhead
+\hline
+\endfoot
+
+Evaluation protocol mismatch
+  & Paper may use full ranking or different filter rules
+  & Manually diff eval loop vs.\
+    \href{https://github.com/Xu107/MMHCL}{MMHCL repository}
+  & $+0$--$10\%$ (if bug found) \\\hline
+
+$\tau$ stuck / too low
+  & Learnable $\tau$ gradient vanish; static alternative may perform better
+  & Static sweep: $\tau \in \{0.2, 0.3, 0.5\}$, 3 runs at single seed
+  & $+3$--$5\%$ \\\hline
+
+AVRF over-filtering
+  & AVRF attenuates discriminative frequency content
+  & Ablation: disable AVRF only; keep APC + IMCF
+  & $+2$--$4\%$ \\\hline
+
+Soft-Routing $\alpha$ wrong
+  & $\alpha = 0.1$ too small; DAMPS barely modifies embeddings
+  & Static sweep: $\alpha \in \{0.3, 0.5, 0.7\}$
+  & $\pm 2\%$ \\\hline
+
+NNZ / avg\_deg explosion
+  & Momentum encoder not controlling adjacency sparsity
+  & Add per-rebuild NNZ logging; force hard re-sparsify to top-$K$
+  & $+2$--$3\%$ \\\hline
+
+Training capacity ceiling
+  & Plateau is true optimum under current capacity
+  & Extend to 400 epochs, patience~50; test \texttt{dim}~128
+  & $+1$--$2\%$ \\\hline
+
+\end{longtable}
+
+\subsection{High-Priority Grid Sweep (\texorpdfstring{$\leq$}{<=} 6 Configurations)}
+
+\begin{table}[htbp]
+\centering
+\caption{Recommended grid sweep (6 configurations, 1 seed each for screening).}
+\label{tab:sweep}
+\begin{tabular}{|r|l|c|c|c|c|}
+\hline
+\rowcolor{tabhead}\textbf{Config} & \textbf{Label} & $\tau$ & $\alpha$ & \texttt{AVRF} & \texttt{max\_epochs} \\
+\hline
+1 & Baseline (current) & learnable (0.1) & 0.1 & ON & 250 \\\hline
+2 & $\tau$-fixed-0.2   & 0.2 (fixed)     & 0.1 & ON & 250 \\\hline
+3 & $\tau$-fixed-0.3   & 0.3 (fixed)     & 0.1 & ON & 250 \\\hline
+4 & AVRF-OFF           & learnable (0.1) & 0.1 & \textbf{OFF} & 250 \\\hline
+5 & $\alpha$-0.5       & learnable (0.1) & \textbf{0.5} & ON & 250 \\\hline
+6 & Protocol-check     & learnable (0.1) & 0.1 & ON & 250 \\\hline
+\end{tabular}
+\end{table}
+
+\textit{Config~6} is reserved for the evaluation protocol audit (no
+retraining required; only changes the evaluation script).
+
+\subsection{Ablation Design for Root Cause Isolation}
+
+To unambiguously identify the primary cause, the following sequential
+ablation is recommended:
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Protocol audit} (zero compute): Compare evaluation
+        functions side-by-side with MMHCL original.  If a bug is found,
+        fix and re-evaluate all 10 seeds.
+  \item \textbf{$\tau$ sweep} (3 $\times$ 1 seed): If Config~2 or~3
+        shows $\geq +3\%$ Recall@20, $\tau$ is confirmed as the
+        dominant factor.  Expand the winning $\tau$ to all 10 seeds.
+  \item \textbf{AVRF ablation} (1 seed): Run Config~4.  If gain is
+        $\geq +2\%$, AVRF is over-filtering.  Consider constraining
+        AVRF logit range to $[-1, 1]$ or adding a diversity-preserving
+        regulariser.
+  \item \textbf{NNZ audit}: Add logging:
+\begin{lstlisting}[language=Python]
+if epoch % R == 0:
+    nnz = adj_matrix.nnz if adj_matrix.issparse() else (adj_matrix != 0).sum().item()
+    avg_deg = nnz / N
+    logger.info(f"Epoch {epoch}: NNZ={nnz}, AvgDeg={avg_deg:.2f}")
+\end{lstlisting}
+        If avg\_deg grows over time, enforce:
+\begin{lstlisting}[language=Python]
+# After each rebuild, hard re-sparsify to top-K neighbours
+adj_matrix = keep_top_k(adj_matrix, k=top_k)
+\end{lstlisting}
+\end{enumerate}
+
+% ===================================================================
+\section{Conclusion}
+% ===================================================================
+
+The DAMPS-MMHCL integration on Amazon Clothing yields a
+\textbf{systematic 10.7\% Recall@20 deficit} relative to the original
+MMHCL baseline (0.0786 vs.\ 0.0881), while NDCG@20 and Precision@20
+degrade only 2.9\% and 2.6\% respectively.  This asymmetric pattern
+conclusively points to \emph{reduced candidate coverage} rather than
+ranking degradation.
+
+The three most probable root causes, ranked by evidence strength, are:
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Evaluation protocol mismatch} (must be ruled out first
+        --- zero compute cost; potential impact up to $+10\%$).
+  \item \textbf{Learnable temperature $\tau$ stuck at $\approx 0.09$}
+        --- observed across all 10 seeds; causes embedding collapse and
+        narrows the top-20 retrieval radius.
+  \item \textbf{AVRF spectral over-filtering} --- attenuates
+        discriminative frequency content, homogenising item
+        representations and degrading hypergraph edge quality.
+\end{enumerate}
+
+\textbf{Three immediate actions} (in priority order):
+\begin{enumerate}[leftmargin=*]
+  \item Audit the evaluation loop against the original MMHCL codebase at
+        \url{https://github.com/Xu107/MMHCL}.
+  \item Run a static $\tau$ sweep $\{0.2, 0.3, 0.5\}$ on a single seed
+        ($\leq 3$ GPU runs, $\approx 6$ hours).
+  \item Run an AVRF-ablation (disable AVRF, keep APC + IMCF active) on
+        a single seed to quantify the filtering penalty.
+\end{enumerate}
+
+If both $\tau$-fix and AVRF-ablation produce positive gains,
+their combination (Config: $\tau = 0.3$, AVRF-OFF) should be
+re-evaluated across all 10 seeds for final statistical reporting.
+
+\end{document}

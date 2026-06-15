@@ -1,0 +1,408 @@
+[2026-05-10 03:19:55] PID: 32680
+[2026-05-10 03:19:55] Namespace(data_path='../data/', seed=367290921, dataset='Clothing', core=5, gpu_id=0, debug='True', verbose=5, epoch=250, batch_size=1024, regs=0.001, lr=0.0001, clip_grad_norm=1.0, embed_size=64, weight_size='[64,64,64]', topk=5, cf_model='LightGCN', norm_type='sym', sparse=0, UI_layers=2, User_layers=3, Item_layers=2, user_loss_ratio=0.03, item_loss_ratio=0.07, temperature=0.1, learnable_tau=1, Ks='[10,20]', test_flag='part', early_stopping_patience=30, early_stopping_min_epochs=75, early_stopping_min_delta=0.0001, early_stopping_mode='max', early_stopping_restore_best=1, use_reduce_lr=1, reduce_lr_factor=0.5, reduce_lr_patience=3, reduce_lr_min=1e-06, use_wandb=1, wandb_project='damps-mmhcl-clothing', wandb_entity='baitapck51cc-uet', wandb_run_name='phase1_avrf_off_seed_367290921', damps_apc=1, damps_avrf=0, damps_imcf=1, damps_permutation_fft=0, damps_soft_routing=1, damps_momentum=1, damps_data_driven_prior=1, damps_num_categories=10, damps_warmup_epochs=10, rebuild_R=5, faiss_threshold=60000, knn_chunk_size=4096, faiss_use_gpu=1, knn_efsearch=64, use_amp=1, use_torch_compile=1, torch_compile_mode='reduce-overhead', torch_compile_dynamic=1, ablation_target='phase1_avrf_off')
+[2026-05-10 03:19:55] DAMPS trainable params: 133
+[2026-05-10 03:19:55] [speedup] torch.compile requested but this PyTorch build's Inductor BACKWARD compiler cannot lower DAMPS's complex FFT region (probe failed: 'complex' object has no attribute 'get_name'). Skipping the wrap and running DAMPS in eager mode.
+[2026-05-10 03:20:27] [diag epoch 0] tau=0.0909 (learnable)  alpha_img=0.0928 alpha_txt=0.1050  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 03:20:27] Epoch 0 [26.6s]: loss=104.45270  mf=53.97295  emb=0.13444  cl=50.34531
+[2026-05-10 03:20:52] Epoch 1 [25.3s]: loss=92.47413  mf=51.36786  emb=0.13588  cl=40.97039
+[2026-05-10 03:21:17] Epoch 2 [25.3s]: loss=87.02453  mf=50.12377  emb=0.13731  cl=36.76345
+[2026-05-10 03:21:42] Epoch 3 [24.9s]: loss=83.21326  mf=48.95316  emb=0.13896  cl=34.12114
+[2026-05-10 03:22:31] Epoch 4 [25.1s + 23.9s]: loss=80.33664  recall@10=0.03273  recall@20=0.05024  ndcg@20=0.02250
+[2026-05-10 03:22:51] Test_Recall@20: 0.05107384  Test_Precision@20: 0.00282266  Test_NDCG@20: 0.02383000
+[2026-05-10 03:23:16] [diag epoch 5] tau=0.0514 (learnable)  alpha_img=0.0510 alpha_txt=0.1243  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 03:23:16] Epoch 5 [25.2s]: loss=78.12674  mf=46.44882  emb=0.14352  cl=31.53440
+[2026-05-10 03:23:41] Epoch 6 [25.0s]: loss=76.57481  mf=45.33564  emb=0.14636  cl=31.09281
+[2026-05-10 03:24:06] Epoch 7 [25.1s]: loss=75.36764  mf=44.39850  emb=0.14941  cl=30.81973
+[2026-05-10 03:24:31] Epoch 8 [25.3s]: loss=74.05396  mf=43.36847  emb=0.15235  cl=30.53314
+[2026-05-10 03:25:18] Epoch 9 [25.1s + 21.3s]: loss=73.09462  recall@10=0.04656  recall@20=0.06832  ndcg@20=0.03114
+[2026-05-10 03:25:37] Test_Recall@20: 0.06573089  Test_Precision@20: 0.00366639  Test_NDCG@20: 0.03236220
+[2026-05-10 03:29:59] [Rebuild] epoch=10  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 03:30:33] [diag epoch 10] tau=0.0481 (learnable)  alpha_img=0.0216 alpha_txt=0.1380  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 03:30:33] Epoch 10 [296.4s]: loss=72.99612  mf=44.65295  emb=0.15481  cl=28.18836
+[2026-05-10 03:31:08] Epoch 11 [35.0s]: loss=71.64676  mf=43.64777  emb=0.15666  cl=27.84234
+[2026-05-10 03:31:42] Epoch 12 [34.1s]: loss=70.96283  mf=43.15727  emb=0.15839  cl=27.64716
+[2026-05-10 03:32:17] Epoch 13 [34.6s]: loss=70.19917  mf=42.48761  emb=0.16027  cl=27.55129
+[2026-05-10 03:33:19] Epoch 14 [34.6s + 27.1s]: loss=69.52009  recall@10=0.04428  recall@20=0.06216  ndcg@20=0.02957
+[2026-05-10 03:36:54] [Rebuild] epoch=15  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 03:37:21] [diag epoch 15] tau=0.0494 (learnable)  alpha_img=0.0061 alpha_txt=0.1442  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 03:37:21] Epoch 15 [242.5s]: loss=68.97812  mf=41.51901  emb=0.16392  cl=27.29520
+[2026-05-10 03:37:48] Epoch 16 [26.9s]: loss=68.28471  mf=40.86662  emb=0.16600  cl=27.25209
+[2026-05-10 03:38:15] Epoch 17 [27.3s]: loss=67.77121  mf=40.43833  emb=0.16808  cl=27.16479
+[2026-05-10 03:38:43] Epoch 18 [27.3s]: loss=67.09287  mf=39.80976  emb=0.17012  cl=27.11299
+[2026-05-10 03:39:31] Epoch 19 [27.3s + 20.5s]: loss=66.62779  recall@10=0.04606  recall@20=0.06590  ndcg@20=0.03037
+[2026-05-10 03:42:35] [Rebuild] epoch=20  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 03:43:11] [diag epoch 20] tau=0.0497 (learnable)  alpha_img=-0.0132 alpha_txt=0.1456  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 03:43:11] Epoch 20 [220.4s]: loss=66.16960  mf=39.02348  emb=0.17428  cl=26.97184
+[2026-05-10 03:43:47] Epoch 21 [35.9s]: loss=65.69664  mf=38.58494  emb=0.17634  cl=26.93536
+[2026-05-10 03:44:23] Epoch 22 [36.0s]: loss=65.06468  mf=38.00503  emb=0.17886  cl=26.88079
+[2026-05-10 03:45:00] Epoch 23 [36.8s]: loss=64.55871  mf=37.55104  emb=0.18109  cl=26.82659
+[2026-05-10 03:45:58] Epoch 24 [36.0s + 22.0s]: loss=64.13978  recall@10=0.04534  recall@20=0.07027  ndcg@20=0.03208
+[2026-05-10 03:46:18] Test_Recall@20: 0.07350685  Test_Precision@20: 0.00411127  Test_NDCG@20: 0.03472312
+[2026-05-10 03:49:00] [Rebuild] epoch=25  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 03:49:36] [diag epoch 25] tau=0.0499 (learnable)  alpha_img=-0.0343 alpha_txt=0.1446  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 03:49:36] Epoch 25 [197.7s]: loss=63.70061  mf=36.77020  emb=0.18571  cl=26.74470
+[2026-05-10 03:50:12] Epoch 26 [36.0s]: loss=63.09380  mf=36.20317  emb=0.18813  cl=26.70249
+[2026-05-10 03:50:49] Epoch 27 [36.5s]: loss=62.77083  mf=35.91500  emb=0.19021  cl=26.66561
+[2026-05-10 03:51:25] Epoch 28 [36.7s]: loss=62.26877  mf=35.43394  emb=0.19265  cl=26.64218
+[2026-05-10 03:52:22] Epoch 29 [36.4s + 20.1s]: loss=61.73990  recall@10=0.04645  recall@20=0.06852  ndcg@20=0.03242
+[2026-05-10 03:52:42] Test_Recall@20: 0.07467785  Test_Precision@20: 0.00415729  Test_NDCG@20: 0.03539093
+[2026-05-10 03:55:24] [Rebuild] epoch=30  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 03:56:00] [diag epoch 30] tau=0.0503 (learnable)  alpha_img=-0.0534 alpha_txt=0.1431  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 03:56:00] Epoch 30 [198.3s]: loss=61.39705  mf=34.62761  emb=0.19708  cl=26.57236
+[2026-05-10 03:56:37] Epoch 31 [36.4s]: loss=61.03361  mf=34.29654  emb=0.19948  cl=26.53759
+[2026-05-10 03:57:13] Epoch 32 [36.1s]: loss=60.63441  mf=33.92352  emb=0.20200  cl=26.50888
+[2026-05-10 03:57:49] Epoch 33 [35.9s]: loss=60.11169  mf=33.42108  emb=0.20437  cl=26.48624
+[2026-05-10 03:58:46] Epoch 34 [36.2s + 21.0s]: loss=59.68059  recall@10=0.04506  recall@20=0.07021  ndcg@20=0.03218
+[2026-05-10 04:01:28] [Rebuild] epoch=35  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 04:02:04] [diag epoch 35] tau=0.0506 (learnable)  alpha_img=-0.0713 alpha_txt=0.1407  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 04:02:04] Epoch 35 [198.7s]: loss=59.33583  mf=32.70181  emb=0.20914  cl=26.42488
+[2026-05-10 04:02:41] Epoch 36 [36.1s]: loss=58.90901  mf=32.29670  emb=0.21170  cl=26.40060
+[2026-05-10 04:03:17] Epoch 37 [36.5s]: loss=58.49278  mf=31.89035  emb=0.21381  cl=26.38861
+[2026-05-10 04:03:53] Epoch 38 [36.2s]: loss=58.18875  mf=31.60064  emb=0.21634  cl=26.37176
+[2026-05-10 04:04:49] Epoch 39 [35.8s + 19.9s]: loss=57.78293  recall@10=0.04664  recall@20=0.07088  ndcg@20=0.03228
+[2026-05-10 04:05:10] Test_Recall@20: 0.07717154  Test_Precision@20: 0.00430558  Test_NDCG@20: 0.03580731
+[2026-05-10 04:08:57] [Rebuild] epoch=40  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 04:09:32] [diag epoch 40] tau=0.0507 (learnable)  alpha_img=-0.0889 alpha_txt=0.1380  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 04:09:32] Epoch 40 [262.1s]: loss=57.23144  mf=30.69308  emb=0.22178  cl=26.31658
+[2026-05-10 04:10:09] Epoch 41 [36.5s]: loss=57.00677  mf=30.47347  emb=0.22385  cl=26.30945
+[2026-05-10 04:10:45] Epoch 42 [36.3s]: loss=56.65182  mf=30.12342  emb=0.22657  cl=26.30183
+[2026-05-10 04:11:21] Epoch 43 [35.9s]: loss=56.19184  mf=29.69236  emb=0.22924  cl=26.27024
+[2026-05-10 04:12:18] Epoch 44 [36.2s + 20.9s]: loss=55.83380  recall@10=0.04664  recall@20=0.07196  ndcg@20=0.03292
+[2026-05-10 04:12:38] Test_Recall@20: 0.07688178  Test_Precision@20: 0.00429536  Test_NDCG@20: 0.03601474
+[2026-05-10 04:17:01] [Rebuild] epoch=45  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 04:17:38] [diag epoch 45] tau=0.0508 (learnable)  alpha_img=-0.1054 alpha_txt=0.1351  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 04:17:38] Epoch 45 [299.9s]: loss=55.46862  mf=29.00811  emb=0.23438  cl=26.22613
+[2026-05-10 04:18:15] Epoch 46 [36.3s]: loss=55.19216  mf=28.74727  emb=0.23670  cl=26.20819
+[2026-05-10 04:18:51] Epoch 47 [36.1s]: loss=54.83758  mf=28.42522  emb=0.23903  cl=26.17333
+[2026-05-10 04:19:26] Epoch 48 [35.8s]: loss=54.48901  mf=28.07712  emb=0.24156  cl=26.17033
+[2026-05-10 04:20:24] Epoch 49 [35.9s + 22.0s]: loss=54.15886  recall@10=0.04643  recall@20=0.07209  ndcg@20=0.03273
+[2026-05-10 04:20:45] Test_Recall@20: 0.07722268  Test_Precision@20: 0.00431070  Test_NDCG@20: 0.03631245
+[2026-05-10 04:25:07] [Rebuild] epoch=50  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 04:25:40] [diag epoch 50] tau=0.0509 (learnable)  alpha_img=-0.1179 alpha_txt=0.1317  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 04:25:40] Epoch 50 [295.5s]: loss=53.84907  mf=27.44615  emb=0.24679  cl=26.15613
+[2026-05-10 04:26:14] Epoch 51 [33.3s]: loss=53.44598  mf=27.05462  emb=0.24948  cl=26.14189
+[2026-05-10 04:26:47] Epoch 52 [33.6s]: loss=53.06522  mf=26.68382  emb=0.25159  cl=26.12982
+[2026-05-10 04:27:21] Epoch 53 [33.4s]: loss=52.82424  mf=26.47775  emb=0.25409  cl=26.09239
+[2026-05-10 04:28:15] Epoch 54 [33.3s + 21.3s]: loss=52.60362  recall@10=0.04792  recall@20=0.07389  ndcg@20=0.03344
+[2026-05-10 04:28:36] Test_Recall@20: 0.07661758  Test_Precision@20: 0.00428513  Test_NDCG@20: 0.03625440
+[2026-05-10 04:32:14] [Rebuild] epoch=55  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 04:32:42] [diag epoch 55] tau=0.0510 (learnable)  alpha_img=-0.1293 alpha_txt=0.1280  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 04:32:42] Epoch 55 [245.5s]: loss=52.17414  mf=25.84261  emb=0.25958  cl=26.07194
+[2026-05-10 04:33:09] Epoch 56 [27.3s]: loss=51.96177  mf=25.63383  emb=0.26212  cl=26.06582
+[2026-05-10 04:33:37] Epoch 57 [27.3s]: loss=51.60673  mf=25.29793  emb=0.26431  cl=26.04449
+[2026-05-10 04:34:04] Epoch 58 [27.1s]: loss=51.38339  mf=25.08066  emb=0.26669  cl=26.03604
+[2026-05-10 04:34:52] Epoch 59 [27.4s + 21.1s]: loss=50.94944  recall@10=0.04710  recall@20=0.07348  ndcg@20=0.03284
+[2026-05-10 04:38:56] [Rebuild] epoch=60  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 04:39:32] [diag epoch 60] tau=0.0512 (learnable)  alpha_img=-0.1417 alpha_txt=0.1238  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 04:39:32] Epoch 60 [279.3s]: loss=50.78326  mf=24.50980  emb=0.27263  cl=26.00083
+[2026-05-10 04:40:07] Epoch 61 [35.6s]: loss=50.38521  mf=24.13209  emb=0.27540  cl=25.97772
+[2026-05-10 04:40:43] Epoch 62 [35.7s]: loss=50.01489  mf=23.76509  emb=0.27852  cl=25.97128
+[2026-05-10 04:41:18] Epoch 63 [35.5s]: loss=49.78511  mf=23.53581  emb=0.28057  cl=25.96873
+[2026-05-10 04:42:14] Epoch 64 [35.0s + 20.7s]: loss=49.48665  recall@10=0.04838  recall@20=0.07471  ndcg@20=0.03402
+[2026-05-10 04:42:34] Test_Recall@20: 0.07839026  Test_Precision@20: 0.00437206  Test_NDCG@20: 0.03673745
+[2026-05-10 04:45:23] [Rebuild] epoch=65  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 04:45:59] [diag epoch 65] tau=0.0511 (learnable)  alpha_img=-0.1545 alpha_txt=0.1201  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 04:45:59] Epoch 65 [205.8s]: loss=49.24491  mf=23.01835  emb=0.28581  cl=25.94075
+[2026-05-10 04:46:36] Epoch 66 [36.4s]: loss=48.83928  mf=22.61968  emb=0.28908  cl=25.93053
+[2026-05-10 04:47:13] Epoch 67 [36.7s]: loss=48.60170  mf=22.38646  emb=0.29169  cl=25.92355
+[2026-05-10 04:47:49] Epoch 68 [36.5s]: loss=48.31638  mf=22.11158  emb=0.29498  cl=25.90982
+[2026-05-10 04:48:45] Epoch 69 [36.1s + 20.2s]: loss=48.08007  recall@10=0.04710  recall@20=0.07507  ndcg@20=0.03354
+[2026-05-10 04:49:05] Test_Recall@20: 0.07723972  Test_Precision@20: 0.00429536  Test_NDCG@20: 0.03622783
+[2026-05-10 04:51:44] [Rebuild] epoch=70  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 04:52:20] [diag epoch 70] tau=0.0514 (learnable)  alpha_img=-0.1656 alpha_txt=0.1162  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 04:52:20] Epoch 70 [195.6s]: loss=47.80556  mf=21.62333  emb=0.29949  cl=25.88274
+[2026-05-10 04:52:57] Epoch 71 [36.6s]: loss=47.65434  mf=21.47959  emb=0.30199  cl=25.87276
+[2026-05-10 04:53:33] Epoch 72 [35.7s]: loss=47.30187  mf=21.13552  emb=0.30424  cl=25.86211
+[2026-05-10 04:54:08] Epoch 73 [35.9s]: loss=47.09535  mf=20.92451  emb=0.30703  cl=25.86381
+[2026-05-10 04:55:20] Epoch 74 [36.4s + 35.4s]: loss=46.82151  recall@10=0.04843  recall@20=0.07437  ndcg@20=0.03356
+[2026-05-10 04:55:20] ##### Early stopping step: 1 #####
+[2026-05-10 04:57:59] [Rebuild] epoch=75  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 04:58:36] [diag epoch 75] tau=0.0517 (learnable)  alpha_img=-0.1768 alpha_txt=0.1115  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 04:58:36] Epoch 75 [195.5s]: loss=46.48892  mf=20.32977  emb=0.31339  cl=25.84577
+[2026-05-10 04:59:11] Epoch 76 [35.5s]: loss=46.29740  mf=20.15480  emb=0.31579  cl=25.82681
+[2026-05-10 04:59:48] Epoch 77 [36.9s]: loss=46.07226  mf=19.93732  emb=0.31849  cl=25.81644
+[2026-05-10 05:00:25] Epoch 78 [36.9s]: loss=45.83557  mf=19.69627  emb=0.32095  cl=25.81835
+[2026-05-10 05:01:22] Epoch 79 [36.6s + 20.6s]: loss=45.63282  recall@10=0.04848  recall@20=0.07565  ndcg@20=0.03421
+[2026-05-10 05:01:43] Test_Recall@20: 0.07873117  Test_Precision@20: 0.00438740  Test_NDCG@20: 0.03676630
+[2026-05-10 05:04:39] [Rebuild] epoch=80  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 05:05:15] [diag epoch 80] tau=0.0518 (learnable)  alpha_img=-0.1835 alpha_txt=0.1074  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 05:05:15] Epoch 80 [212.0s]: loss=45.48243  mf=19.37129  emb=0.32527  cl=25.78586
+[2026-05-10 05:05:52] Epoch 81 [36.7s]: loss=45.23249  mf=19.10155  emb=0.32752  cl=25.80342
+[2026-05-10 05:06:28] Epoch 82 [36.0s]: loss=44.98983  mf=18.88057  emb=0.32978  cl=25.77947
+[2026-05-10 05:07:04] Epoch 83 [36.2s]: loss=44.77643  mf=18.67610  emb=0.33211  cl=25.76822
+[2026-05-10 05:08:05] Epoch 84 [36.4s + 24.5s]: loss=44.63945  recall@10=0.04852  recall@20=0.07528  ndcg@20=0.03418
+[2026-05-10 05:08:05] ##### Early stopping step: 1 #####
+[2026-05-10 05:12:22] [Rebuild] epoch=85  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 05:12:58] [diag epoch 85] tau=0.0519 (learnable)  alpha_img=-0.1910 alpha_txt=0.1031  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9999
+[2026-05-10 05:12:58] Epoch 85 [293.4s]: loss=44.34390  mf=18.25108  emb=0.33787  cl=25.75495
+[2026-05-10 05:13:34] Epoch 86 [36.3s]: loss=44.13386  mf=18.05001  emb=0.34003  cl=25.74383
+[2026-05-10 05:14:12] Epoch 87 [37.1s]: loss=43.90118  mf=17.82882  emb=0.34332  cl=25.72905
+[2026-05-10 05:14:48] Epoch 88 [36.4s]: loss=43.72252  mf=17.64571  emb=0.34602  cl=25.73079
+[2026-05-10 05:15:45] Epoch 89 [35.9s + 21.3s]: loss=43.46086  recall@10=0.05016  recall@20=0.07605  ndcg@20=0.03419
+[2026-05-10 05:16:05] Test_Recall@20: 0.07829652  Test_Precision@20: 0.00435161  Test_NDCG@20: 0.03699704
+[2026-05-10 05:20:31] [Rebuild] epoch=90  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 05:21:05] [diag epoch 90] tau=0.0516 (learnable)  alpha_img=-0.2010 alpha_txt=0.0985  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 05:21:05] Epoch 90 [300.3s]: loss=43.26424  mf=17.19742  emb=0.35134  cl=25.71548
+[2026-05-10 05:21:41] Epoch 91 [35.4s]: loss=43.13224  mf=17.07594  emb=0.35374  cl=25.70256
+[2026-05-10 05:22:16] Epoch 92 [35.4s]: loss=42.93567  mf=16.89423  emb=0.35589  cl=25.68554
+[2026-05-10 05:22:51] Epoch 93 [35.1s]: loss=42.78150  mf=16.74935  emb=0.35804  cl=25.67412
+[2026-05-10 05:23:47] Epoch 94 [34.5s + 21.5s]: loss=42.55616  recall@10=0.04929  recall@20=0.07610  ndcg@20=0.03466
+[2026-05-10 05:24:07] Test_Recall@20: 0.07827095  Test_Precision@20: 0.00435672  Test_NDCG@20: 0.03713251
+[2026-05-10 05:28:31] [Rebuild] epoch=95  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 05:29:05] [diag epoch 95] tau=0.0517 (learnable)  alpha_img=-0.2112 alpha_txt=0.0938  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 05:29:05] Epoch 95 [297.9s]: loss=42.27833  mf=16.24101  emb=0.36378  cl=25.67353
+[2026-05-10 05:29:40] Epoch 96 [34.7s]: loss=42.10236  mf=16.07608  emb=0.36754  cl=25.65875
+[2026-05-10 05:30:14] Epoch 97 [34.3s]: loss=41.82976  mf=15.81847  emb=0.37070  cl=25.64059
+[2026-05-10 05:30:48] Epoch 98 [34.2s]: loss=41.67019  mf=15.65899  emb=0.37273  cl=25.63847
+[2026-05-10 05:31:44] Epoch 99 [34.1s + 21.6s]: loss=41.48119  recall@10=0.04958  recall@20=0.07689  ndcg@20=0.03461
+[2026-05-10 05:32:04] Test_Recall@20: 0.07905502  Test_Precision@20: 0.00439251  Test_NDCG@20: 0.03740445
+[2026-05-10 05:36:26] [Rebuild] epoch=100  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 05:37:01] [diag epoch 100] tau=0.0521 (learnable)  alpha_img=-0.2267 alpha_txt=0.0873  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 05:37:01] Epoch 100 [296.4s]: loss=41.23251  mf=15.22915  emb=0.37888  cl=25.62447
+[2026-05-10 05:37:37] Epoch 101 [35.6s]: loss=41.06543  mf=15.07036  emb=0.38205  cl=25.61302
+[2026-05-10 05:38:12] Epoch 102 [35.1s]: loss=40.86230  mf=14.86206  emb=0.38393  cl=25.61631
+[2026-05-10 05:38:47] Epoch 103 [35.5s]: loss=40.62641  mf=14.63477  emb=0.38671  cl=25.60494
+[2026-05-10 05:39:42] Epoch 104 [34.1s + 21.2s]: loss=40.46830  recall@10=0.04917  recall@20=0.07725  ndcg@20=0.03461
+[2026-05-10 05:40:03] Test_Recall@20: 0.07777664  Test_Precision@20: 0.00433115  Test_NDCG@20: 0.03704428
+[2026-05-10 05:43:25] [Rebuild] epoch=105  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 05:44:01] [diag epoch 105] tau=0.0522 (learnable)  alpha_img=-0.2384 alpha_txt=0.0810  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 05:44:01] Epoch 105 [238.2s]: loss=40.31776  mf=14.34324  emb=0.39230  cl=25.58221
+[2026-05-10 05:44:38] Epoch 106 [37.0s]: loss=40.17240  mf=14.21315  emb=0.39375  cl=25.56550
+[2026-05-10 05:45:13] Epoch 107 [34.9s]: loss=40.01358  mf=14.05871  emb=0.39733  cl=25.55754
+[2026-05-10 05:45:49] Epoch 108 [35.7s]: loss=39.95742  mf=13.98890  emb=0.40032  cl=25.56820
+[2026-05-10 05:46:46] Epoch 109 [36.3s + 20.8s]: loss=39.63961  recall@10=0.04941  recall@20=0.07685  ndcg@20=0.03431
+[2026-05-10 05:46:46] ##### Early stopping step: 1 #####
+[2026-05-10 05:49:23] [Rebuild] epoch=110  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 05:49:59] [diag epoch 110] tau=0.0524 (learnable)  alpha_img=-0.2551 alpha_txt=0.0739  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 05:49:59] Epoch 110 [193.2s]: loss=39.41144  mf=13.45400  emb=0.40551  cl=25.55194
+[2026-05-10 05:50:36] Epoch 111 [36.6s]: loss=39.28479  mf=13.33965  emb=0.40829  cl=25.53685
+[2026-05-10 05:51:12] Epoch 112 [35.9s]: loss=39.22724  mf=13.27560  emb=0.41036  cl=25.54129
+[2026-05-10 05:51:48] Epoch 113 [36.6s]: loss=39.01060  mf=13.07276  emb=0.41305  cl=25.52480
+[2026-05-10 05:52:48] Epoch 114 [36.4s + 23.6s]: loss=38.87295  recall@10=0.04929  recall@20=0.07631  ndcg@20=0.03457
+[2026-05-10 05:52:48] ##### Early stopping step: 2 #####
+[2026-05-10 05:55:26] [Rebuild] epoch=115  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 05:56:03] [diag epoch 115] tau=0.0523 (learnable)  alpha_img=-0.2725 alpha_txt=0.0667  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 05:56:03] Epoch 115 [194.6s]: loss=38.65078  mf=12.72866  emb=0.41816  cl=25.50397
+[2026-05-10 05:56:40] Epoch 116 [36.5s]: loss=38.55420  mf=12.62875  emb=0.42117  cl=25.50428
+[2026-05-10 05:57:16] Epoch 117 [36.5s]: loss=38.33702  mf=12.42009  emb=0.42375  cl=25.49318
+[2026-05-10 05:57:52] Epoch 118 [35.7s]: loss=38.24513  mf=12.33026  emb=0.42676  cl=25.48811
+[2026-05-10 05:58:49] Epoch 119 [35.8s + 21.8s]: loss=38.07135  recall@10=0.05021  recall@20=0.07822  ndcg@20=0.03516
+[2026-05-10 05:59:10] Test_Recall@20: 0.07882491  Test_Precision@20: 0.00438740  Test_NDCG@20: 0.03799672
+[2026-05-10 06:01:52] [Rebuild] epoch=120  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 06:02:29] [diag epoch 120] tau=0.0521 (learnable)  alpha_img=-0.2947 alpha_txt=0.0578  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 06:02:29] Epoch 120 [199.1s]: loss=37.94332  mf=12.02078  emb=0.43163  cl=25.49091
+[2026-05-10 06:03:06] Epoch 121 [36.8s]: loss=37.82970  mf=11.92855  emb=0.43407  cl=25.46708
+[2026-05-10 06:03:42] Epoch 122 [36.3s]: loss=37.65518  mf=11.74698  emb=0.43689  cl=25.47130
+[2026-05-10 06:04:18] Epoch 123 [35.6s]: loss=37.51116  mf=11.60969  emb=0.43984  cl=25.46163
+[2026-05-10 06:05:15] Epoch 124 [36.6s + 20.6s]: loss=37.38761  recall@10=0.05071  recall@20=0.07730  ndcg@20=0.03478
+[2026-05-10 06:05:15] ##### Early stopping step: 1 #####
+[2026-05-10 06:08:59] [Rebuild] epoch=125  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 06:09:35] [diag epoch 125] tau=0.0524 (learnable)  alpha_img=-0.3188 alpha_txt=0.0486  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 06:09:35] Epoch 125 [259.8s]: loss=37.26615  mf=11.36267  emb=0.44430  cl=25.45918
+[2026-05-10 06:10:11] Epoch 126 [36.8s]: loss=37.05528  mf=11.16041  emb=0.44692  cl=25.44795
+[2026-05-10 06:10:49] Epoch 127 [37.4s]: loss=37.02623  mf=11.12873  emb=0.44935  cl=25.44815
+[2026-05-10 06:11:25] Epoch 128 [35.9s]: loss=36.83051  mf=10.94287  emb=0.45169  cl=25.43595
+[2026-05-10 06:12:22] Epoch 129 [36.0s + 21.0s]: loss=36.64546  recall@10=0.05113  recall@20=0.07848  ndcg@20=0.03548
+[2026-05-10 06:12:42] Test_Recall@20: 0.07981353  Test_Precision@20: 0.00443342  Test_NDCG@20: 0.03781971
+[2026-05-10 06:16:58] [Rebuild] epoch=130  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 06:17:35] [diag epoch 130] tau=0.0526 (learnable)  alpha_img=-0.3455 alpha_txt=0.0391  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 06:17:35] Epoch 130 [293.3s]: loss=36.57218  mf=10.69355  emb=0.45673  cl=25.42191
+[2026-05-10 06:18:11] Epoch 131 [36.3s]: loss=36.46580  mf=10.58244  emb=0.45943  cl=25.42393
+[2026-05-10 06:18:47] Epoch 132 [36.2s]: loss=36.29661  mf=10.42614  emb=0.46191  cl=25.40856
+[2026-05-10 06:19:24] Epoch 133 [36.8s]: loss=36.22852  mf=10.34698  emb=0.46496  cl=25.41658
+[2026-05-10 06:20:21] Epoch 134 [36.2s + 21.0s]: loss=36.13327  recall@10=0.05011  recall@20=0.07726  ndcg@20=0.03506
+[2026-05-10 06:20:21] ##### Early stopping step: 1 #####
+[2026-05-10 06:24:46] [Rebuild] epoch=135  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 06:25:21] [diag epoch 135] tau=0.0525 (learnable)  alpha_img=-0.3687 alpha_txt=0.0314  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 06:25:21] Epoch 135 [299.3s]: loss=36.02594  mf=10.16053  emb=0.46944  cl=25.39598
+[2026-05-10 06:25:55] Epoch 136 [34.6s]: loss=35.90550  mf=10.00969  emb=0.47138  cl=25.42443
+[2026-05-10 06:26:29] Epoch 137 [33.9s]: loss=35.76948  mf=9.87341  emb=0.47315  cl=25.42292
+[2026-05-10 06:27:03] Epoch 138 [34.0s]: loss=35.68649  mf=9.80218  emb=0.47515  cl=25.40916
+[2026-05-10 06:27:59] Epoch 139 [34.6s + 21.8s]: loss=35.63969  recall@10=0.05001  recall@20=0.07692  ndcg@20=0.03518
+[2026-05-10 06:27:59] ##### Early stopping step: 2 #####
+[2026-05-10 06:31:37] [Rebuild] epoch=140  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 06:32:05] [diag epoch 140] tau=0.0523 (learnable)  alpha_img=-0.3648 alpha_txt=0.0305  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 06:32:05] Epoch 140 [245.5s]: loss=35.52468  mf=9.64545  emb=0.47789  cl=25.40134
+[2026-05-10 06:32:33] Epoch 141 [27.7s]: loss=35.46750  mf=9.59037  emb=0.47992  cl=25.39722
+[2026-05-10 06:33:00] Epoch 142 [27.4s]: loss=35.45102  mf=9.56798  emb=0.48099  cl=25.40205
+[2026-05-10 06:33:28] Epoch 143 [28.0s]: loss=35.32487  mf=9.44753  emb=0.48347  cl=25.39388
+[2026-05-10 06:34:16] Epoch 144 [28.0s + 20.5s]: loss=35.31210  recall@10=0.05098  recall@20=0.07632  ndcg@20=0.03487
+[2026-05-10 06:34:16] ##### Early stopping step: 3 #####
+[2026-05-10 06:38:37] [Rebuild] epoch=145  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 06:39:12] [diag epoch 145] tau=0.0526 (learnable)  alpha_img=-0.3682 alpha_txt=0.0295  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 06:39:12] Epoch 145 [295.9s]: loss=35.19836  mf=9.32901  emb=0.48634  cl=25.38301
+[2026-05-10 06:39:48] Epoch 146 [35.3s]: loss=35.08741  mf=9.21276  emb=0.48807  cl=25.38658
+[2026-05-10 06:40:23] Epoch 147 [35.0s]: loss=35.05135  mf=9.17359  emb=0.48981  cl=25.38796
+[2026-05-10 06:40:57] Epoch 148 [34.2s]: loss=35.03576  mf=9.16006  emb=0.49207  cl=25.38362
+[2026-05-10 06:41:54] Epoch 149 [35.6s + 21.6s]: loss=34.80229  recall@10=0.05040  recall@20=0.07848  ndcg@20=0.03566
+[2026-05-10 06:42:15] Test_Recall@20: 0.08084987  Test_Precision@20: 0.00450501  Test_NDCG@20: 0.03849132
+[2026-05-10 06:45:07] [Rebuild] epoch=150  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 06:45:44] [diag epoch 150] tau=0.0533 (learnable)  alpha_img=-0.3782 alpha_txt=0.0271  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 06:45:44] Epoch 150 [209.5s]: loss=34.56487  mf=8.82046  emb=0.49703  cl=25.24738
+[2026-05-10 06:46:20] Epoch 151 [36.2s]: loss=34.75753  mf=8.90847  emb=0.49786  cl=25.35120
+[2026-05-10 06:46:56] Epoch 152 [36.1s]: loss=34.63827  mf=8.77771  emb=0.50080  cl=25.35977
+[2026-05-10 06:47:32] Epoch 153 [35.8s]: loss=34.57612  mf=8.67828  emb=0.50246  cl=25.39537
+[2026-05-10 06:48:30] Epoch 154 [36.3s + 21.2s]: loss=34.44890  recall@10=0.05061  recall@20=0.07754  ndcg@20=0.03553
+[2026-05-10 06:48:30] ##### Early stopping step: 1 #####
+[2026-05-10 06:51:23] [Rebuild] epoch=155  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 06:52:00] [diag epoch 155] tau=0.0522 (learnable)  alpha_img=-0.4058 alpha_txt=0.0223  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 06:52:00] Epoch 155 [210.2s]: loss=34.37712  mf=8.51012  emb=0.50845  cl=25.35856
+[2026-05-10 06:52:36] Epoch 156 [36.0s]: loss=34.25004  mf=8.38039  emb=0.51025  cl=25.35940
+[2026-05-10 06:53:13] Epoch 157 [36.7s]: loss=34.14264  mf=8.28134  emb=0.51162  cl=25.34968
+[2026-05-10 06:53:48] Epoch 158 [35.7s]: loss=34.14931  mf=8.28227  emb=0.51331  cl=25.35372
+[2026-05-10 06:54:44] Epoch 159 [35.5s + 20.3s]: loss=34.02278  recall@10=0.04967  recall@20=0.07661  ndcg@20=0.03519
+[2026-05-10 06:54:44] ##### Early stopping step: 2 #####
+[2026-05-10 06:57:31] [Rebuild] epoch=160  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 06:58:07] [diag epoch 160] tau=0.0526 (learnable)  alpha_img=-0.3965 alpha_txt=0.0225  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 06:58:07] Epoch 160 [203.3s]: loss=33.94897  mf=8.09844  emb=0.51726  cl=25.33327
+[2026-05-10 06:58:43] Epoch 161 [35.8s]: loss=33.90356  mf=8.05158  emb=0.51902  cl=25.33297
+[2026-05-10 06:59:19] Epoch 162 [36.1s]: loss=33.78908  mf=7.94334  emb=0.52043  cl=25.32531
+[2026-05-10 06:59:56] Epoch 163 [36.3s]: loss=33.77055  mf=7.92573  emb=0.52247  cl=25.32235
+[2026-05-10 07:00:52] Epoch 164 [36.6s + 20.2s]: loss=33.66068  recall@10=0.05098  recall@20=0.07781  ndcg@20=0.03565
+[2026-05-10 07:00:52] ##### Early stopping step: 3 #####
+[2026-05-10 07:03:33] [Rebuild] epoch=165  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 07:04:10] [diag epoch 165] tau=0.0528 (learnable)  alpha_img=-0.3977 alpha_txt=0.0219  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 07:04:10] Epoch 165 [197.4s]: loss=33.59837  mf=7.75084  emb=0.52485  cl=25.32268
+[2026-05-10 07:04:46] Epoch 166 [36.7s]: loss=33.59732  mf=7.75278  emb=0.52728  cl=25.31726
+[2026-05-10 07:05:23] Epoch 167 [36.5s]: loss=33.48218  mf=7.64858  emb=0.52868  cl=25.30492
+[2026-05-10 07:05:58] Epoch 168 [35.5s]: loss=33.44082  mf=7.59783  emb=0.53115  cl=25.31183
+[2026-05-10 07:06:55] Epoch 169 [37.2s + 19.9s]: loss=33.42546  recall@10=0.05128  recall@20=0.07791  ndcg@20=0.03581
+[2026-05-10 07:07:17] Test_Recall@20: 0.07859480  Test_Precision@20: 0.00437206  Test_NDCG@20: 0.03780928
+[2026-05-10 07:11:07] [Rebuild] epoch=170  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 07:11:44] [diag epoch 170] tau=0.0536 (learnable)  alpha_img=-0.4068 alpha_txt=0.0203  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 07:11:44] Epoch 170 [267.4s]: loss=33.16252  mf=7.43480  emb=0.53624  cl=25.19148
+[2026-05-10 07:12:21] Epoch 171 [36.7s]: loss=33.27119  mf=7.42295  emb=0.53675  cl=25.31149
+[2026-05-10 07:12:56] Epoch 172 [35.7s]: loss=33.20888  mf=7.37221  emb=0.53871  cl=25.29796
+[2026-05-10 07:13:33] Epoch 173 [36.3s]: loss=33.12635  mf=7.28953  emb=0.53972  cl=25.29710
+[2026-05-10 07:14:31] Epoch 174 [36.6s + 21.8s]: loss=33.04549  recall@10=0.05037  recall@20=0.07822  ndcg@20=0.03559
+[2026-05-10 07:14:31] ##### Early stopping step: 1 #####
+[2026-05-10 07:18:48] [Rebuild] epoch=175  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 07:19:24] [diag epoch 175] tau=0.0529 (learnable)  alpha_img=-0.4069 alpha_txt=0.0197  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 07:19:24] Epoch 175 [292.5s]: loss=33.03858  mf=7.20723  emb=0.54380  cl=25.28755
+[2026-05-10 07:20:00] Epoch 176 [36.7s]: loss=32.95001  mf=7.11712  emb=0.54582  cl=25.28707
+[2026-05-10 07:20:37] Epoch 177 [36.9s]: loss=32.85724  mf=7.03263  emb=0.54796  cl=25.27665
+[2026-05-10 07:21:13] Epoch 178 [35.4s]: loss=32.81137  mf=6.98654  emb=0.54961  cl=25.27522
+[2026-05-10 07:22:12] Epoch 179 [36.7s + 22.8s]: loss=32.83695  recall@10=0.05093  recall@20=0.07771  ndcg@20=0.03574
+[2026-05-10 07:22:12] ##### Early stopping step: 2 #####
+[2026-05-10 07:26:37] [Rebuild] epoch=180  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 07:27:11] [diag epoch 180] tau=0.0529 (learnable)  alpha_img=-0.4163 alpha_txt=0.0184  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 07:27:11] Epoch 180 [299.1s]: loss=32.68776  mf=6.86018  emb=0.55385  cl=25.27373
+[2026-05-10 07:27:45] Epoch 181 [33.5s]: loss=32.62416  mf=6.80819  emb=0.55630  cl=25.25966
+[2026-05-10 07:28:20] Epoch 182 [34.8s]: loss=32.54576  mf=6.73499  emb=0.55800  cl=25.25278
+[2026-05-10 07:28:54] Epoch 183 [34.7s]: loss=32.50964  mf=6.69018  emb=0.55946  cl=25.26000
+[2026-05-10 07:29:49] Epoch 184 [33.7s + 21.0s]: loss=32.35292  recall@10=0.05046  recall@20=0.07771  ndcg@20=0.03560
+[2026-05-10 07:29:49] ##### Early stopping step: 3 #####
+[2026-05-10 07:33:28] [Rebuild] epoch=185  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 07:33:55] [diag epoch 185] tau=0.0530 (learnable)  alpha_img=-0.4154 alpha_txt=0.0177  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 07:33:55] Epoch 185 [246.3s]: loss=32.37371  mf=6.55961  emb=0.56411  cl=25.24999
+[2026-05-10 07:34:23] Epoch 186 [28.0s]: loss=32.32392  mf=6.50643  emb=0.56586  cl=25.25162
+[2026-05-10 07:34:51] Epoch 187 [27.7s]: loss=32.29404  mf=6.47280  emb=0.56736  cl=25.25388
+[2026-05-10 07:35:19] Epoch 188 [27.8s]: loss=32.23622  mf=6.42293  emb=0.56926  cl=25.24404
+[2026-05-10 07:36:08] Epoch 189 [27.5s + 21.9s]: loss=32.14993  recall@10=0.05051  recall@20=0.07713  ndcg@20=0.03551
+[2026-05-10 07:36:08] ##### Early stopping step: 4 #####
+[2026-05-10 07:40:30] [Rebuild] epoch=190  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 07:41:05] [diag epoch 190] tau=0.0538 (learnable)  alpha_img=-0.4268 alpha_txt=0.0156  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 07:41:05] Epoch 190 [296.6s]: loss=31.87158  mf=6.19155  emb=0.57532  cl=25.10471
+[2026-05-10 07:41:40] Epoch 191 [35.3s]: loss=32.04749  mf=6.22145  emb=0.57539  cl=25.25066
+[2026-05-10 07:42:15] Epoch 192 [35.0s]: loss=31.91822  mf=6.12021  emb=0.57869  cl=25.21933
+[2026-05-10 07:42:52] Epoch 193 [36.1s]: loss=31.93898  mf=6.14428  emb=0.57863  cl=25.21607
+[2026-05-10 07:43:46] Epoch 194 [34.4s + 20.2s]: loss=31.90073  recall@10=0.05048  recall@20=0.07904  ndcg@20=0.03610
+[2026-05-10 07:44:08] Test_Recall@20: 0.07946069  Test_Precision@20: 0.00442319  Test_NDCG@20: 0.03829501
+[2026-05-10 07:46:57] [Rebuild] epoch=195  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 07:47:32] [diag epoch 195] tau=0.0531 (learnable)  alpha_img=-0.4243 alpha_txt=0.0157  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 07:47:32] Epoch 195 [204.6s]: loss=31.82913  mf=6.03192  emb=0.58270  cl=25.21452
+[2026-05-10 07:48:09] Epoch 196 [36.2s]: loss=31.81656  mf=6.01854  emb=0.58405  cl=25.21397
+[2026-05-10 07:48:46] Epoch 197 [37.5s]: loss=31.73651  mf=5.93808  emb=0.58562  cl=25.21281
+[2026-05-10 07:49:23] Epoch 198 [36.3s]: loss=31.64963  mf=5.83773  emb=0.58848  cl=25.22343
+[2026-05-10 07:50:19] Epoch 199 [35.8s + 20.9s]: loss=31.57899  recall@10=0.05165  recall@20=0.07761  ndcg@20=0.03564
+[2026-05-10 07:50:19] ##### Early stopping step: 1 #####
+[2026-05-10 07:52:59] [Rebuild] epoch=200  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 07:53:36] [diag epoch 200] tau=0.0532 (learnable)  alpha_img=-0.4283 alpha_txt=0.0149  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 07:53:36] Epoch 200 [196.7s]: loss=31.54241  mf=5.75828  emb=0.59206  cl=25.19208
+[2026-05-10 07:54:11] Epoch 201 [35.2s]: loss=31.48371  mf=5.70263  emb=0.59332  cl=25.18776
+[2026-05-10 07:54:48] Epoch 202 [36.8s]: loss=31.47160  mf=5.68382  emb=0.59524  cl=25.19254
+[2026-05-10 07:55:25] Epoch 203 [36.7s]: loss=31.46179  mf=5.66248  emb=0.59685  cl=25.20246
+[2026-05-10 07:56:22] Epoch 204 [36.4s + 21.1s]: loss=31.39331  recall@10=0.05160  recall@20=0.07697  ndcg@20=0.03528
+[2026-05-10 07:56:22] ##### Early stopping step: 2 #####
+[2026-05-10 07:59:12] [Rebuild] epoch=205  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 07:59:48] [diag epoch 205] tau=0.0532 (learnable)  alpha_img=-0.4294 alpha_txt=0.0144  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 07:59:48] Epoch 205 [205.5s]: loss=31.29529  mf=5.51472  emb=0.60124  cl=25.17934
+[2026-05-10 08:00:23] Epoch 206 [35.5s]: loss=31.21957  mf=5.44090  emb=0.60364  cl=25.17503
+[2026-05-10 08:00:59] Epoch 207 [36.2s]: loss=31.22510  mf=5.44998  emb=0.60437  cl=25.17075
+[2026-05-10 08:01:36] Epoch 208 [36.1s]: loss=31.09742  mf=5.32712  emb=0.60706  cl=25.16324
+[2026-05-10 08:02:31] Epoch 209 [35.7s + 20.0s]: loss=31.10785  recall@10=0.05119  recall@20=0.07827  ndcg@20=0.03589
+[2026-05-10 08:02:31] ##### Early stopping step: 3 #####
+[2026-05-10 08:05:23] [Rebuild] epoch=210  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 08:05:59] [diag epoch 210] tau=0.0533 (learnable)  alpha_img=-0.4319 alpha_txt=0.0142  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 08:05:59] Epoch 210 [207.7s]: loss=31.04909  mf=5.28054  emb=0.61027  cl=25.15828
+[2026-05-10 08:06:35] Epoch 211 [36.1s]: loss=31.04750  mf=5.26153  emb=0.61349  cl=25.17248
+[2026-05-10 08:07:12] Epoch 212 [37.3s]: loss=30.94481  mf=5.17915  emb=0.61558  cl=25.15008
+[2026-05-10 08:07:49] Epoch 213 [36.3s]: loss=30.90334  mf=5.13671  emb=0.61664  cl=25.14999
+[2026-05-10 08:08:45] Epoch 214 [36.0s + 20.4s]: loss=30.89571  recall@10=0.05062  recall@20=0.07718  ndcg@20=0.03540
+[2026-05-10 08:08:45] ##### Early stopping step: 4 #####
+[2026-05-10 08:12:32] [Rebuild] epoch=215  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 08:13:09] [diag epoch 215] tau=0.0543 (learnable)  alpha_img=-0.4444 alpha_txt=0.0115  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 08:13:09] Epoch 215 [264.2s]: loss=30.68933  mf=5.05586  emb=0.62206  cl=25.01140
+[2026-05-10 08:13:46] Epoch 216 [36.7s]: loss=30.82511  mf=5.03345  emb=0.62229  cl=25.16937
+[2026-05-10 08:14:23] Epoch 217 [36.8s]: loss=30.74895  mf=4.97723  emb=0.62531  cl=25.14641
+[2026-05-10 08:14:59] Epoch 218 [36.5s]: loss=30.64794  mf=4.89509  emb=0.62611  cl=25.12674
+[2026-05-10 08:15:57] Epoch 219 [37.1s + 20.9s]: loss=30.59126  recall@10=0.05062  recall@20=0.07786  ndcg@20=0.03575
+[2026-05-10 08:15:57] ##### Early stopping step: 5 #####
+[2026-05-10 08:20:23] [Rebuild] epoch=220  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 08:20:59] [diag epoch 220] tau=0.0534 (learnable)  alpha_img=-0.4441 alpha_txt=0.0120  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 08:20:59] Epoch 220 [301.3s]: loss=30.58363  mf=4.81759  emb=0.62955  cl=25.13649
+[2026-05-10 08:21:35] Epoch 221 [36.3s]: loss=30.55091  mf=4.80059  emb=0.63048  cl=25.11984
+[2026-05-10 08:22:12] Epoch 222 [36.9s]: loss=30.48476  mf=4.73674  emb=0.63281  cl=25.11520
+[2026-05-10 08:22:47] Epoch 223 [35.5s]: loss=30.44617  mf=4.70219  emb=0.63542  cl=25.10856
+[2026-05-10 08:23:45] Epoch 224 [36.1s + 21.4s]: loss=30.43843  recall@10=0.05093  recall@20=0.07697  ndcg@20=0.03533
+[2026-05-10 08:23:45] ##### Early stopping step: 6 #####
+[2026-05-10 08:28:13] [Rebuild] epoch=225  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 08:28:49] [diag epoch 225] tau=0.0535 (learnable)  alpha_img=-0.4432 alpha_txt=0.0114  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 08:28:49] Epoch 225 [303.9s]: loss=30.40315  mf=4.65673  emb=0.63716  cl=25.10926
+[2026-05-10 08:29:24] Epoch 226 [35.5s]: loss=30.38345  mf=4.63202  emb=0.63953  cl=25.11190
+[2026-05-10 08:30:00] Epoch 227 [35.4s]: loss=30.44001  mf=4.67118  emb=0.64035  cl=25.12848
+[2026-05-10 08:30:34] Epoch 228 [34.7s]: loss=30.34197  mf=4.59423  emb=0.64229  cl=25.10545
+[2026-05-10 08:31:32] Epoch 229 [35.2s + 22.1s]: loss=30.23980  recall@10=0.05288  recall@20=0.07622  ndcg@20=0.03530
+[2026-05-10 08:31:32] ##### Early stopping step: 7 #####
+[2026-05-10 08:35:12] [Rebuild] epoch=230  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 08:35:39] [diag epoch 230] tau=0.0536 (learnable)  alpha_img=-0.4446 alpha_txt=0.0112  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 08:35:39] Epoch 230 [247.4s]: loss=30.21795  mf=4.47731  emb=0.64615  cl=25.09449
+[2026-05-10 08:36:06] Epoch 231 [27.3s]: loss=30.21348  mf=4.46324  emb=0.64876  cl=25.10148
+[2026-05-10 08:36:34] Epoch 232 [27.2s]: loss=30.18403  mf=4.43088  emb=0.64911  cl=25.10404
+[2026-05-10 08:37:01] Epoch 233 [27.3s]: loss=30.10628  mf=4.36845  emb=0.65152  cl=25.08631
+[2026-05-10 08:37:49] Epoch 234 [27.4s + 21.0s]: loss=30.09407  recall@10=0.05178  recall@20=0.07725  ndcg@20=0.03553
+[2026-05-10 08:37:49] ##### Early stopping step: 8 #####
+[2026-05-10 08:42:03] [Rebuild] epoch=235  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 08:42:38] [diag epoch 235] tau=0.0546 (learnable)  alpha_img=-0.4525 alpha_txt=0.0100  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 08:42:38] Epoch 235 [289.0s]: loss=29.86065  mf=4.25275  emb=0.65661  cl=24.95129
+[2026-05-10 08:43:14] Epoch 236 [35.9s]: loss=30.04437  mf=4.29360  emb=0.65665  cl=25.09412
+[2026-05-10 08:43:50] Epoch 237 [36.4s]: loss=29.98327  mf=4.23571  emb=0.65848  cl=25.08909
+[2026-05-10 08:44:27] Epoch 238 [36.5s]: loss=29.92875  mf=4.19240  emb=0.66045  cl=25.07590
+[2026-05-10 08:45:23] Epoch 239 [35.5s + 20.6s]: loss=29.90853  recall@10=0.05119  recall@20=0.07843  ndcg@20=0.03552
+[2026-05-10 08:45:23] ##### Early stopping step: 9 #####
+[2026-05-10 08:48:10] [Rebuild] epoch=240  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 08:48:46] [diag epoch 240] tau=0.0536 (learnable)  alpha_img=-0.4498 alpha_txt=0.0102  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 08:48:46] Epoch 240 [203.0s]: loss=29.90861  mf=4.17874  emb=0.66280  cl=25.06708
+[2026-05-10 08:49:22] Epoch 241 [36.1s]: loss=29.82253  mf=4.08850  emb=0.66435  cl=25.06967
+[2026-05-10 08:49:59] Epoch 242 [36.5s]: loss=29.84647  mf=4.10508  emb=0.66677  cl=25.07463
+[2026-05-10 08:50:35] Epoch 243 [36.6s]: loss=29.77769  mf=4.05181  emb=0.66848  cl=25.05740
+[2026-05-10 08:51:32] Epoch 244 [36.6s + 20.5s]: loss=29.76259  recall@10=0.05165  recall@20=0.07766  ndcg@20=0.03531
+[2026-05-10 08:51:32] ##### Early stopping step: 10 #####
+[2026-05-10 08:54:14] [Rebuild] epoch=245  NNZ=1539245  avg_deg=66.83  (target K=5)
+[2026-05-10 08:54:50] [diag epoch 245] tau=0.0538 (learnable)  alpha_img=-0.4509 alpha_txt=0.0104  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-10 08:54:50] Epoch 245 [197.5s]: loss=29.70277  mf=3.97328  emb=0.67199  cl=25.05750
+[2026-05-10 08:55:26] Epoch 246 [35.8s]: loss=29.69864  mf=3.97399  emb=0.67337  cl=25.05128
+[2026-05-10 08:56:02] Epoch 247 [36.7s]: loss=29.66759  mf=3.93733  emb=0.67491  cl=25.05536
+[2026-05-10 08:56:39] Epoch 248 [36.7s]: loss=29.58679  mf=3.86083  emb=0.67655  cl=25.04942
+[2026-05-10 08:57:50] Epoch 249 [36.1s + 34.5s]: loss=29.59080  recall@10=0.05219  recall@20=0.07682  ndcg@20=0.03513
+[2026-05-10 08:57:50] ##### Early stopping step: 11 #####
+[2026-05-10 08:57:50] BEST_Val_Recall@10: 0.05047937
+[2026-05-10 08:57:50] BEST_Val_Recall@20: 0.07904468
+[2026-05-10 08:57:50] BEST_Val_Recall_Peak_Epoch: 194
+[2026-05-10 08:57:50] BEST_Val_NDCG@10: 0.02876519
+[2026-05-10 08:57:50] BEST_Val_NDCG@20: 0.03610437
+[2026-05-10 08:57:50] BEST_Val_NDCG_Peak_Epoch: 194
+[2026-05-10 08:57:50] BEST_Test_Recall@20: 0.07946069
+[2026-05-10 08:57:50] BEST_Test_Precision@20: 0.00442319
+[2026-05-10 08:57:50] BEST_Test_NDCG@20: 0.03829501
+[2026-05-10 08:57:50] {'precision': array([0.00623849, 0.00442319]), 'recall': array([0.05617713, 0.07946069]), 'ndcg': array([0.03185657, 0.03829501]), 'hit_ratio': array([0.06125997, 0.08621395]), 'auc': 0.0}

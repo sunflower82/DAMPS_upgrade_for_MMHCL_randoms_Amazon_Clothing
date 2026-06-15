@@ -1,0 +1,13 @@
+{"time":"2026-05-12T18:48:16.4687866+07:00","level":"INFO","msg":"stream: starting","core version":"0.24.2"}
+{"time":"2026-05-12T18:48:16.9886112+07:00","level":"INFO","msg":"stream: created new stream","id":"xwqm3ltf"}
+{"time":"2026-05-12T18:48:16.9892017+07:00","level":"INFO","msg":"handler: started","stream_id":"xwqm3ltf"}
+{"time":"2026-05-12T18:48:16.9938735+07:00","level":"INFO","msg":"stream: started","id":"xwqm3ltf"}
+{"time":"2026-05-12T18:48:16.9938735+07:00","level":"INFO","msg":"writer: started","stream_id":"xwqm3ltf"}
+{"time":"2026-05-12T18:48:16.9938735+07:00","level":"INFO","msg":"sender: started","stream_id":"xwqm3ltf"}
+{"time":"2026-05-12T20:39:29.3012333+07:00","level":"INFO","msg":"api: retrying HTTP error","status":500,"url":"https://api.wandb.ai/files/baitapck51cc-uet/damps-mmhcl-clothing/xwqm3ltf/file_stream","body":"{\"error\":\"context deadline exceeded\"}"}
+{"time":"2026-05-12T21:01:39.0228424+07:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2026-05-12T21:01:39.8430678+07:00","level":"INFO","msg":"handler: operation stats","stats":{}}
+{"time":"2026-05-12T21:01:39.8460866+07:00","level":"INFO","msg":"stream: closing","id":"xwqm3ltf"}
+{"time":"2026-05-12T21:01:39.8460866+07:00","level":"INFO","msg":"handler: closed","stream_id":"xwqm3ltf"}
+{"time":"2026-05-12T21:01:39.8460866+07:00","level":"INFO","msg":"sender: closed","stream_id":"xwqm3ltf"}
+{"time":"2026-05-12T21:01:39.8460866+07:00","level":"INFO","msg":"stream: closed","id":"xwqm3ltf"}

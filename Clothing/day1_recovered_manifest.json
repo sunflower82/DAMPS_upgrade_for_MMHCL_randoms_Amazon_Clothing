@@ -1,0 +1,66 @@
+{
+  "log_root": "C:\\Users\\Anh Khoi\\Desktop\\MyCode\\My research progress\\DAMPS_upgrade_for_MMHCL_randoms_Amazon_Clothing",
+  "n_runs_indexed": 6,
+  "runs": [
+    {
+      "kind": "D1_apc",
+      "topk": null,
+      "run_dir": "Clothing/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.3_taulearn=0_R=5_apc=0_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D1_apc_off",
+      "primary_log": "Clothing/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.3_taulearn=0_R=5_apc=0_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D1_apc_off/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.3_taulearn=0_R=5_apc=0_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D1_apc_off.txt",
+      "mm_sum": null,
+      "BEST_Test_Recall@20": 0.09197177,
+      "BEST_Test_NDCG@20": 0.04421792,
+      "log_exists": true
+    },
+    {
+      "kind": "D2",
+      "topk": 5,
+      "run_dir": "Clothing/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D2_topk5",
+      "primary_log": "Clothing/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D2_topk5/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D2_topk5.txt",
+      "mm_sum": null,
+      "BEST_Test_Recall@20": 0.08360776,
+      "BEST_Test_NDCG@20": 0.03973149,
+      "log_exists": true
+    },
+    {
+      "kind": "D2",
+      "topk": 10,
+      "run_dir": "Clothing/damps_uu_ii=3_2_0.03_0.07_topk=10_t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D2_topk10",
+      "primary_log": "Clothing/damps_uu_ii=3_2_0.03_0.07_topk=10_t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D2_topk10/damps_uu_ii=3_2_0.03_0.07_topk=10_t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D2_topk10.txt",
+      "mm_sum": null,
+      "BEST_Test_Recall@20": 0.08192882,
+      "BEST_Test_NDCG@20": 0.03890215,
+      "log_exists": true
+    },
+    {
+      "kind": "D2",
+      "topk": 15,
+      "run_dir": "Clothing/damps_uu_ii=3_2_0.03_0.07_topk=15_t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D2_topk15",
+      "primary_log": "Clothing/damps_uu_ii=3_2_0.03_0.07_topk=15_t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D2_topk15/damps_uu_ii=3_2_0.03_0.07_topk=15_t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D2_topk15.txt",
+      "mm_sum": null,
+      "BEST_Test_Recall@20": 0.08016806,
+      "BEST_Test_NDCG@20": 0.03789149,
+      "log_exists": true
+    },
+    {
+      "kind": "D2",
+      "topk": 20,
+      "run_dir": "Clothing/damps_uu_ii=3_2_0.03_0.07_topk=20_t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D2_topk20",
+      "primary_log": "Clothing/damps_uu_ii=3_2_0.03_0.07_topk=20_t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D2_topk20/damps_uu_ii=3_2_0.03_0.07_topk=20_t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D2_topk20.txt",
+      "mm_sum": null,
+      "BEST_Test_Recall@20": 0.07944876,
+      "BEST_Test_NDCG@20": 0.03757249,
+      "log_exists": true
+    },
+    {
+      "kind": "D3",
+      "topk": null,
+      "run_dir": "Clothing/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_taulearn=1_R=5_apc=0_avrf=0_imcf=0_regs=0.001_dim=64_seed=737791071_diag_D3_mmhcl_pure",
+      "primary_log": "Clothing/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_taulearn=1_R=5_apc=0_avrf=0_imcf=0_regs=0.001_dim=64_seed=737791071_diag_D3_mmhcl_pure/damps_uu_ii=3_2_0.03_0.07_topk=5_t=0.1_taulearn=1_R=5_apc=0_avrf=0_imcf=0_regs=0.001_dim=64_seed=737791071_diag_D3_mmhcl_pure.txt",
+      "mm_sum": null,
+      "BEST_Test_Recall@20": 0.0831322,
+      "BEST_Test_NDCG@20": 0.03992726,
+      "log_exists": true
+    }
+  ]
+}

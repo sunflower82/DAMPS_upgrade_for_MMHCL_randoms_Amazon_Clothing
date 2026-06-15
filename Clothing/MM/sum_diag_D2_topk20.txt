@@ -1,0 +1,1 @@
+damps_uu_ii=3_2_0.03_0.07_topk=20_t=0.3_taulearn=0_R=5_apc=1_avrf=0_imcf=1_regs=0.001_dim=64_seed=737791071_diag_D2_topk20:{'precision': array([0.00596236, 0.00443854]), 'recall': array([0.05345504, 0.07932945]), 'ndcg': array([0.03027975, 0.03757249]), 'hit_ratio': array([0.05819186, 0.08682757]), 'auc': 0.0}

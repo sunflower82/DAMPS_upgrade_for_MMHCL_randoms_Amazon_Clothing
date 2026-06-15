@@ -1,0 +1,43 @@
+c:\Users\Anh Khoi\Desktop\MyCode\My research progress\DAMPS_upgrade_for_MMHCL_randoms_Amazon_Clothing\MMHCL_DAMPS_Project\train.py:570: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\torch\csrc\autograd\generated\python_variable_methods.cpp:837.)
+  loss += float(batch_total)
+[2026-05-06 17:40:16] [diag epoch 0] tau=0.0909 (learnable)  alpha_img=0.0922 alpha_txt=0.1048  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-06 17:40:16] Epoch 0 [26.0s]: loss=104.10134  mf=54.01320  emb=0.13443  cl=49.95371
+[2026-05-06 17:40:41] Epoch 1 [24.9s]: loss=92.09445  mf=51.39862  emb=0.13585  cl=40.55998
+[2026-05-06 17:41:06] Epoch 2 [24.9s]: loss=86.84289  mf=50.14174  emb=0.13726  cl=36.56389
+[2026-05-06 17:41:31] Epoch 3 [24.9s]: loss=83.09895  mf=48.96105  emb=0.13892  cl=33.99897
+[2026-05-06 17:42:13] Epoch 4 [25.1s + 17.0s]: loss=80.24335  recall@10=0.03143  recall@20=0.05062  ndcg@20=0.02243
+[2026-05-06 17:42:30] Test_Recall@20: 0.04882559  Test_Precision@20: 0.00271528  Test_NDCG@20: 0.02301607
+[2026-05-06 17:42:56] [diag epoch 5] tau=0.0516 (learnable)  alpha_img=0.0513 alpha_txt=0.1259  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-06 17:42:56] Epoch 5 [25.6s]: loss=78.17370  mf=46.54282  emb=0.14347  cl=31.48741
+[2026-05-06 17:43:21] Epoch 6 [24.8s]: loss=76.65982  mf=45.46247  emb=0.14632  cl=31.05102
+[2026-05-06 17:43:46] Epoch 7 [25.0s]: loss=75.28447  mf=44.30387  emb=0.14934  cl=30.83126
+[2026-05-06 17:44:10] Epoch 8 [24.9s]: loss=74.18131  mf=43.47156  emb=0.15225  cl=30.55750
+[2026-05-06 17:44:52] Epoch 9 [25.1s + 16.7s]: loss=73.17995  recall@10=0.04751  recall@20=0.07025  ndcg@20=0.03214
+[2026-05-06 17:45:09] Test_Recall@20: 0.06667178  Test_Precision@20: 0.00368685  Test_NDCG@20: 0.03156672
+[2026-05-06 17:48:47] [Rebuild] epoch=10  NNZ=1578861  avg_deg=68.55  (target K=5)
+[2026-05-06 17:49:16] [diag epoch 10] tau=0.0481 (learnable)  alpha_img=0.0276 alpha_txt=0.1402  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-06 17:49:16] Epoch 10 [246.6s]: loss=72.77229  mf=44.48244  emb=0.15488  cl=28.13498
+[2026-05-06 17:49:44] Epoch 11 [28.3s]: loss=71.68421  mf=43.68781  emb=0.15661  cl=27.83979
+[2026-05-06 17:50:24] Epoch 12 [40.3s]: loss=70.77799  mf=42.95281  emb=0.15841  cl=27.66677
+[2026-05-06 17:51:07] Epoch 13 [42.4s]: loss=70.12378  mf=42.39757  emb=0.16016  cl=27.56604
+[2026-05-06 17:51:57] Epoch 14 [33.2s + 17.0s]: loss=69.57866  recall@10=0.04501  recall@20=0.06443  ndcg@20=0.03000
+[2026-05-06 17:56:47] [Rebuild] epoch=15  NNZ=1578861  avg_deg=68.55  (target K=5)
+[2026-05-06 17:57:25] [diag epoch 15] tau=0.0494 (learnable)  alpha_img=0.0155 alpha_txt=0.1423  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-06 17:57:25] Epoch 15 [327.8s]: loss=69.01969  mf=41.52964  emb=0.16392  cl=27.32613
+[2026-05-06 17:58:03] Epoch 16 [38.7s]: loss=68.37029  mf=40.95163  emb=0.16584  cl=27.25282
+[2026-05-06 17:58:45] Epoch 17 [41.5s]: loss=67.82883  mf=40.46972  emb=0.16788  cl=27.19124
+[2026-05-06 17:59:25] Epoch 18 [39.8s]: loss=67.32007  mf=40.03215  emb=0.16989  cl=27.11803
+[2026-05-06 18:00:24] Epoch 19 [41.4s + 17.5s]: loss=66.74067  recall@10=0.04552  recall@20=0.06963  ndcg@20=0.03193
+[2026-05-06 18:03:47] [Rebuild] epoch=20  NNZ=1578861  avg_deg=68.55  (target K=5)
+[2026-05-06 18:04:26] [diag epoch 20] tau=0.0497 (learnable)  alpha_img=-0.0013 alpha_txt=0.1419  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-06 18:04:26] Epoch 20 [242.1s]: loss=66.18548  mf=38.99252  emb=0.17395  cl=27.01901
+[2026-05-06 18:05:07] Epoch 21 [41.6s]: loss=65.76942  mf=38.60171  emb=0.17593  cl=26.99177
+[2026-05-06 18:05:46] Epoch 22 [39.0s]: loss=65.26276  mf=38.16571  emb=0.17805  cl=26.91899
+[2026-05-06 18:06:25] Epoch 23 [39.0s]: loss=64.72212  mf=37.67550  emb=0.18008  cl=26.86654
+[2026-05-06 18:07:23] Epoch 24 [40.5s + 17.3s]: loss=64.41873  recall@10=0.04669  recall@20=0.07024  ndcg@20=0.03237
+[2026-05-06 18:07:40] Test_Recall@20: 0.07064158  Test_Precision@20: 0.00393230  Test_NDCG@20: 0.03378068
+[2026-05-06 18:10:56] [Rebuild] epoch=25  NNZ=1578861  avg_deg=68.55  (target K=5)
+[2026-05-06 18:11:39] [diag epoch 25] tau=0.0500 (learnable)  alpha_img=-0.0190 alpha_txt=0.1407  tanh_sat: img=0.000 txt=0.000  baseline_asc=0.9998
+[2026-05-06 18:11:39] Epoch 25 [239.0s]: loss=63.95446  mf=36.97486  emb=0.18443  cl=26.79517
+[2026-05-06 18:12:19] Epoch 26 [39.6s]: loss=63.50659  mf=36.56171  emb=0.18671  cl=26.75817
