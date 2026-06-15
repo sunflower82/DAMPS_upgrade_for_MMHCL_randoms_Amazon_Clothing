@@ -2,10 +2,12 @@
 #  DAMPS-MMHCL — Repository ignore rules
 # =============================================================================
 
+
 # --- macOS / Windows metadata ---
 .DS_Store
 Thumbs.db
 desktop.ini
+
 
 # --- Python ---
 __pycache__/
@@ -18,11 +20,13 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+
 # --- Virtual environments ---
 .venv/
 venv/
 env/
 ENV/
+
 
 # --- Editor / IDE ---
 .vscode/
@@ -30,10 +34,12 @@ ENV/
 *.swp
 *.swo
 
+
 # --- Experiment tracking ---
 codes/wandb/
 MMHCL_DAMPS_Project/wandb/
 wandb/
+
 
 # --- Training artifacts ---
 *.pth
@@ -43,8 +49,10 @@ wandb/
 *.npy
 *.npz
 
+
 # --- Dataset payloads (large, should be downloaded separately) ---
 data/
+
 
 # --- Per-run training outputs (re-generated each training run) ---
 Clothing/uu_ii=*/
@@ -52,14 +60,60 @@ Clothing/MM/uu_ii=*
 Clothing/damps_uu_ii=*/
 Clothing/MM/damps_uu_ii=*
 Clothing/multi_seed_summary*
-log/
+
+
+# --- Unpublished experiment results & ablation summaries ---
+Clothing/phase1_*.json
+Clothing/MM/sum_*.txt
+Clothing/MM/sum_.txt
+
+
+# --- Unpublished analysis & internal research notes ---
+ANALYSIS_RESULTS_DISCREPANCY.md
+HYPERPARAMETER_UPDATES_SUMMARY.md
+WANDB_ANALYSIS_AND_OPTIMIZATION.md
+WANDB_INTEGRATION_SUMMARY.md
+WHERE_CHANGES_APPLIED.md
+TRAINING_STATUS.md
+README_MONITORING.md
+AUTO_TRAIN_README.md
+QUICK_START.md
+
+
+# --- Seed experiment result files (Vietnamese filename) ---
+Kết quả*.txt
+
+
+# --- Training logs (raw output, re-generated) ---
+log/clothing.txt
+log/sports.txt
+log/tiktok.txt
+log/Training_Curves.png
+log/convert2MMRec/*.log
+
+
+# --- W&B sweep config (exposes hyperparameter search space) ---
+MMHCL_DAMPS_Project/scripts/wandb_sweep.yaml
+MMHCL_DAMPS_Project/scripts/run_wandb_sweep.py
+
+
+# --- Monitoring & automation scripts (internal tooling) ---
+auto_train.py
+check_training_status.py
+monitor_training.py
+quick_status.py
+speed_optimizations.py
+start_monitoring.bat
+watch_training.bat
+
 
 # --- Spreadsheets / CSV monitoring snapshots ---
 *.xlsx
 *.csv
 
+
 # --- Privacy: Jupyter Notebooks, PDF and LaTeX source documents ---
 *.ipynb
-*.ipynb_checkpoints/
+.ipynb_checkpoints/
 *.pdf
 *.tex
