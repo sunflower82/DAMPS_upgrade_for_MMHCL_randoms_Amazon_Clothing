@@ -1,0 +1,465 @@
+\documentclass[11pt, a4paper]{article}
+
+% ====== Required Packages ======
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath, amssymb, amsfonts}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage[table]{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{listings}
+\usepackage{titlesec}
+
+% ====== Page Geometry ======
+\geometry{top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm, headheight=14pt}
+
+% ====== Colors ======
+\definecolor{accentblue}{RGB}{30, 80, 160}
+\definecolor{passgreen}{RGB}{198, 239, 206}
+\definecolor{warnyellow}{RGB}{255, 235, 156}
+\definecolor{warnred}{RGB}{255, 199, 206}
+\definecolor{tableheader}{RGB}{230, 236, 245}
+\definecolor{codebg}{RGB}{246, 248, 250}
+\definecolor{codekw}{RGB}{170, 13, 145}
+\definecolor{codecmt}{RGB}{0, 110, 60}
+\definecolor{codestr}{RGB}{196, 26, 22}
+
+% ====== Section formatting ======
+\titleformat{\section}{\large\bfseries\color{accentblue}}{\thesection}{1em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{1em}{}
+
+% ====== Hyperlink Setup ======
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accentblue,
+  urlcolor=accentblue,
+  pdftitle={DAMPS-MMHCL Wave 1 Compliance Audit and M1.5 Sweep Driver},
+}
+
+% ====== Listings (Python) ======
+\lstdefinestyle{py}{
+  language=Python,
+  backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{codecmt}\itshape,
+  stringstyle=\color{codestr},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=8pt,
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{gray!40},
+  tabsize=4,
+  columns=fullflexible,
+  literate={->}{{$\rightarrow$}}1 {>=}{{$\geq$}}1 {<=}{{$\leq$}}1
+}
+
+% ====== Custom marks ======
+\newcommand{\cmark}{\textcolor{green!60!black}{\textbf{\checkmark}}}
+\newcommand{\warnmark}{\textcolor{orange!80!black}{\textbf{!}}}
+
+\newcolumntype{Y}{>{\centering\arraybackslash}X}
+\newcolumntype{Z}{>{\raggedright\arraybackslash}X}
+
+% ====== Header / Footer ======
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textit{DAMPS-MMHCL Wave 1 --- LogQ Compliance Audit}}
+\fancyhead[R]{\small\thepage}
+\fancyfoot[C]{\small Phase 2 Execution Verification Report}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+\title{%
+  \textbf{Wave 1 Implementation Audit: Decoupled LogQ Deployment (1B $\rightarrow$ 1A)}\\[0.4em]
+  \large DAMPS-MMHCL Phase 2 --- Section 8.2 Compliance Verification\\[0.2em]
+  \normalsize Code-Level vs.\ Execution-Level Completion Assessment
+}
+\author{DAMPS-MMHCL Research Team}
+\date{\today}
+
+% ============================================================
+\begin{document}
+% ============================================================
+
+\maketitle
+\tableofcontents
+\newpage
+
+% ------------------------------------------------------------
+\section{Executive Summary}
+% ------------------------------------------------------------
+
+The 1B/1A source code achieves \textbf{100\% conformance} to the design
+specification --- including the subtle safety details (fail-fast behaviour,
+item-branch-only application, and float32 overflow protection). However, while the
+implementation is complete at the code level, \textbf{Wave 1 is not yet 100\%
+``complete'' at the execution level}, because the M1.5 milestone has never actually
+been run. The following sections detail the gap.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Completion Dimension} & \textbf{Level} & \textbf{Status} \\
+\midrule
+\cellcolor{passgreen}Code-level (1B + 1A implementation) & $\sim$100\% &
+  \cmark~Spec-conformant, incl.\ safety details \\
+\cellcolor{warnred}Execution-level (M1.5 milestone) & Not met &
+  \warnmark~No run, no logs, no sweep \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ------------------------------------------------------------
+\section{Issues Preventing Wave 1 From Reaching 100\% ``Completion''}
+% ------------------------------------------------------------
+
+\subsection{Issue 1 --- The training notebook never enables LogQ (the largest gap)}
+
+The notebook \texttt{Local\_Random\_seeds\_train\_mmhcl\_clothing} currently runs
+only the rev44 Phase~1 configuration (\texttt{apc\_off\_combined}). A full inspection
+of every \texttt{train.py} invocation reveals only nine \texttt{-{}-damps\_*} flags
+(\texttt{apc}, \texttt{avrf}, \texttt{imcf}, \texttt{fft}, \texttt{routing},
+\texttt{momentum}, \texttt{prior}, \texttt{categories}, \texttt{warmup}) and
+\textbf{not a single \texttt{-{}-enable\_logq} line} (zero occurrences of the token
+\texttt{logq} anywhere in the notebook). This means the Wave~1 code has been merged
+but \textbf{never executed} --- the M1.5 milestone has no data.
+
+\subsection{Issue 2 --- No evidence of a 10/10 green test run}
+
+The M1.5 README mandates that ``all tests must be green before merging 1A,'' but the
+repository contains no CI artifact or pytest log. The output of
+\texttt{pytest tests/test\_popularity\_prior.py -v} must be attached as evidence.
+
+\subsection{Issue 3 --- No backward-compatibility smoke test}
+
+The README requires running one epoch with \texttt{-{}-enable\_logq 0} and then
+performing a bit-for-bit \texttt{diff} against rev45. No log demonstrating that this
+check was performed has been found.
+
+\subsection{Issue 4 --- The \texttt{logq\_scale} sweep has not been run}
+
+The specification stresses that \texttt{logq\_scale} $\in \{0.05, 0.1, 0.3, 1.0\}$
+must be swept \emph{before} trusting the literal specification, because
+\texttt{scale}\,$=1.0$ produces logits of magnitude $\sim 40$, which overflow.
+This sweep is a precondition of the M1.5 gate and is currently absent.
+
+\subsection{Issue 5 --- A minor technical risk inside the LogQ code path}
+
+In the \texttt{use\_logq} branch, \texttt{col\_slice} is passed as the \emph{entire}
+\texttt{indices} for every chunk, whereas \texttt{refl\_sim}/\texttt{between\_sim} are
+computed over \texttt{z1[mask]} (the current chunk only). It must be confirmed that
+\texttt{log\_q\_term[col\_slice]} is applied correctly along the column axis (the full
+$N$-item dimension) and is not misaligned when \texttt{batch\_size}\,$<$\,\texttt{num\_nodes}.
+The current logic appears correct (columns $=$ the full item set), but a small numerical
+test should verify the loss value when $N >$ batch size.
+
+% ------------------------------------------------------------
+\section{Compliance Matrix (Code Level)}
+% ------------------------------------------------------------
+
+\renewcommand{\arraystretch}{1.35}
+\begin{table}[h]
+\centering
+\caption{Code-level conformance of the 1B + 1A implementation against rev54 §8.2.}
+\begin{tabularx}{\textwidth}{|Z|Z|c|}
+\hline
+\rowcolor{tableheader}
+\textbf{Spec requirement (rev54 §8.2)} & \textbf{Actual implementation} & \textbf{Status} \\
+\hline
+Split 1B (estimator) from 1A (loss) into two PRs &
+  \texttt{damps/popularity\_prior.py} is pure; loss patch is separate &
+  \cellcolor{passgreen}\cmark \\
+\hline
+$q(i)$ Laplace: $(n_i+\beta)/(\sum_j n_j + |I|\cdot\beta)$ &
+  \texttt{compute\_log\_q} laplace mode matches the formula &
+  \cellcolor{passgreen}\cmark \\
+\hline
+Support raw vs.\ Laplace (warning §3.1) &
+  three modes available: laplace / raw / sqrt &
+  \cellcolor{passgreen}\cmark \\
+\hline
+Cache $+$ invalidation when the train split changes &
+  SHA1 signature over (mode, $\beta$, $n_{items}$, $\sum$counts) &
+  \cellcolor{passgreen}\cmark \\
+\hline
+Independent unit tests for the estimator &
+  10 tests (T1--T10) $+$ 1 slow test &
+  \cellcolor{passgreen}\cmark \\
+\hline
+\texttt{enable\_logq=False} $\Rightarrow$ bit-for-bit identical to rev45 &
+  \texttt{f\_simple} branch preserved; default flag $=0$ &
+  \cellcolor{passgreen}\cmark \\
+\hline
+Fail-fast when the log\_q buffer is all zeros &
+  \texttt{RuntimeError} if \texttt{log\_q.abs().sum()==0} &
+  \cellcolor{passgreen}\cmark \\
+\hline
+LogQ applies to the item branch only, NOT the user branch &
+  item \texttt{apply\_logq=True}, user \texttt{apply\_logq=False} &
+  \cellcolor{passgreen}\cmark \\
+\hline
+Two extra safety hyperparameters (\texttt{logq\_scale}, \texttt{logq\_clip}) against float32 overflow &
+  present $+$ clip $\pm 5.0$, scale sweepable &
+  \cellcolor{passgreen}\cmark \\
+\hline
+Five CLI flags (\texttt{enable\_logq}, \texttt{logq\_mode/beta/scale/clip}) &
+  added to \texttt{parser.py} &
+  \cellcolor{passgreen}\cmark \\
+\hline
+\end{tabularx}
+\end{table}
+
+% ------------------------------------------------------------
+\section{Summary}
+% ------------------------------------------------------------
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Code level: $\sim$100\%} --- conformant to the spec, including the
+    safety details.
+  \item \textbf{Wave 1 execution level: not met} --- because M1.5 has not been run:
+    the notebook does not enable \texttt{-{}-enable\_logq}, there is no pytest log, no
+    backward-compatibility smoke test, and no scale sweep.
+\end{itemize}
+
+\noindent\textbf{Remaining work to reach 100\% Wave~1:}
+\begin{enumerate}[leftmargin=*]
+  \item Add a notebook cell/variant that passes
+    \texttt{-{}-enable\_logq 1 -{}-logq\_mode laplace -{}-logq\_beta 1.0 -{}-logq\_scale \{sweep\}}.
+  \item Attach the 10/10 pytest log.
+  \item Run the backward-compatibility diff.
+  \item Run the 24-run sweep and report the M1.5 gate
+    (R@20 $\geq 0.0925$, with no seed below $0.0890$).
+\end{enumerate}
+
+% ------------------------------------------------------------
+\section{Appendix: M1.5 Sweep Driver Notebook Cell}
+% ------------------------------------------------------------
+
+The cell below executes the M1.5 sweep over the matrix
+\texttt{logq\_scale} $\times$ \texttt{logq\_mode} $\times$ \texttt{seed}. It calls
+\texttt{train.py} once per configuration, parses the \texttt{BEST\_Test\_*} metrics
+from each run, aggregates per-(mode, scale) means and standard deviations across
+seeds, and evaluates the M1.5 gate. Paste it as a new cell at the end of the
+notebook (it reuses \texttt{DAMPS\_DIR}, \texttt{dataset}, and \texttt{PYTHON\_EXE}
+defined in the earlier cells).
+
+\begin{lstlisting}[style=py, caption={M1.5 sweep driver: logq\_scale $\times$ logq\_mode $\times$ seed.}]
+# =====================================================================
+# Section 8.2 -- Wave 1 / M1.5 sweep driver
+#   Matrix:  logq_scale x logq_mode x seed   (calls train.py per config)
+#   Gate:    mean Recall@20 >= 0.0925  AND  every seed >= 0.0890
+# =====================================================================
+from __future__ import annotations
+
+import os
+import re
+import sys
+import json
+import time
+import random
+import subprocess
+from typing import Any
+
+# ---- 0. Resolve project dirs (reuse earlier-cell globals if present) ----
+try:
+    _DAMPS_DIR = DAMPS_DIR
+except NameError:
+    _DAMPS_DIR = os.getcwd()
+try:
+    _PYTHON = PYTHON_EXE
+except NameError:
+    _PYTHON = sys.executable
+try:
+    _DATASET = dataset
+except NameError:
+    _DATASET = "clothing"
+
+if os.path.normpath(os.getcwd()) != os.path.normpath(_DAMPS_DIR):
+    os.chdir(_DAMPS_DIR)
+
+# ---- 1. Sweep matrix definition --------------------------------------
+LOGQ_SCALES: list[float] = [0.05, 0.1, 0.3, 1.0]   # spec-mandated scale sweep
+LOGQ_MODES:  list[str]   = ["laplace"]             # add "raw","sqrt" to widen
+N_SEEDS: int = 5                                   # 4 scales x 1 mode x 5 = 20 runs
+LOGQ_BETA: float = 1.0
+LOGQ_CLIP: float = 5.0
+
+# M1.5 acceptance gate (rev54 Section 8.2 / Section 6)
+GATE_MEAN_RECALL: float = 0.0925   # mean R@20 must reach this
+GATE_MIN_RECALL:  float = 0.0890   # NO seed may fall below this (rollback gate)
+
+# Reuse the seed list from the Phase 1 sweep if available, else generate.
+try:
+    SEEDS: list[int] = list(seeds)[:N_SEEDS]          # noqa: F821
+    if len(SEEDS) < N_SEEDS:
+        raise NameError
+except NameError:
+    random.seed(2026)
+    SEEDS = [random.randint(1, 10_000) for _ in range(N_SEEDS)]
+print(f"[M1.5] seeds = {SEEDS}")
+
+# ---- 2. Fixed rev45 apc_off_combined backbone flags ------------------
+#   Identical to the Phase-1 'combined' variant so the ONLY delta is LogQ.
+BACKBONE_FLAGS: list[str] = [
+    "--dataset",                 _DATASET,
+    "--temperature",             "0.3",
+    "--damps_apc",               "0",
+    "--damps_avrf",              "0",
+    "--damps_imcf",              "1",
+    "--damps_permutation_fft",   "1",
+    "--damps_soft_routing",      "1",
+    "--damps_momentum",          "1",
+    "--damps_data_driven_prior", "1",
+    "--damps_warmup_epochs",     "0",
+]
+
+# ---- 3. Metric parser (matches BEST_Test_* in train.py text logs) ----
+_PAT = {
+    "recall@20": re.compile(r"BEST_Test_Recall@20[^0-9]*([0-9]*\.?[0-9]+)"),
+    "ndcg@20":   re.compile(r"BEST_Test_NDCG@20[^0-9]*([0-9]*\.?[0-9]+)"),
+}
+
+def _parse_metrics(stdout: str) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for key, pat in _PAT.items():
+        hits = pat.findall(stdout)
+        if hits:
+            out[key] = float(hits[-1])   # last = best-checkpoint snapshot
+    return out
+
+# ---- 4. Run one (mode, scale, seed) configuration --------------------
+def run_one(mode: str, scale: float, seed: int) -> dict[str, Any]:
+    cmd: list[str] = [
+        _PYTHON, "train.py",
+        *BACKBONE_FLAGS,
+        "--seed",        str(seed),
+        # ---- Wave 1 LogQ activation (the delta vs rev45) ----
+        "--enable_logq", "1",
+        "--logq_mode",   mode,
+        "--logq_beta",   str(LOGQ_BETA),
+        "--logq_scale",  str(scale),
+        "--logq_clip",   str(LOGQ_CLIP),
+    ]
+    t0 = time.time()
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=_DAMPS_DIR)
+    dt = time.time() - t0
+    log = proc.stdout + "\n" + proc.stderr
+    metrics = _parse_metrics(log)
+    ok = ("recall@20" in metrics) and (proc.returncode == 0)
+    if not ok:
+        print(f"  [WARN] mode={mode} scale={scale} seed={seed} "
+              f"rc={proc.returncode} -> last 400 chars:\n{log[-400:]}")
+    return {
+        "mode": mode, "scale": scale, "seed": seed,
+        "recall@20": metrics.get("recall@20"),
+        "ndcg@20":   metrics.get("ndcg@20"),
+        "runtime_s": round(dt, 1), "ok": ok,
+    }
+
+# ---- 5. Execute the full matrix --------------------------------------
+all_runs: list[dict[str, Any]] = []
+total = len(LOGQ_MODES) * len(LOGQ_SCALES) * len(SEEDS)
+i = 0
+print("=" * 72)
+print(f"M1.5 SWEEP: {total} runs "
+      f"({len(LOGQ_MODES)} mode x {len(LOGQ_SCALES)} scale x {len(SEEDS)} seed)")
+print("=" * 72)
+for mode in LOGQ_MODES:
+    for scale in LOGQ_SCALES:
+        for seed in SEEDS:
+            i += 1
+            print(f"[{i}/{total}] mode={mode} scale={scale} seed={seed} ...",
+                  flush=True)
+            all_runs.append(run_one(mode, scale, seed))
+
+# ---- 6. Aggregate per (mode, scale) and evaluate the gate ------------
+def _mean(xs: list[float]) -> float:
+    return sum(xs) / len(xs) if xs else float("nan")
+
+def _std(xs: list[float]) -> float:
+    if len(xs) < 2:
+        return 0.0
+    m = _mean(xs)
+    return (sum((x - m) ** 2 for x in xs) / (len(xs) - 1)) ** 0.5
+
+summary: list[dict[str, Any]] = []
+for mode in LOGQ_MODES:
+    for scale in LOGQ_SCALES:
+        rs = [r["recall@20"] for r in all_runs
+              if r["mode"] == mode and r["scale"] == scale
+              and r["recall@20"] is not None]
+        ns = [r["ndcg@20"] for r in all_runs
+              if r["mode"] == mode and r["scale"] == scale
+              and r["ndcg@20"] is not None]
+        if not rs:
+            continue
+        mean_r, min_r = _mean(rs), min(rs)
+        passed = (mean_r >= GATE_MEAN_RECALL) and (min_r >= GATE_MIN_RECALL)
+        summary.append({
+            "mode": mode, "scale": scale, "n": len(rs),
+            "recall_mean": round(mean_r, 4), "recall_std": round(_std(rs), 4),
+            "recall_min": round(min_r, 4),
+            "ndcg_mean": round(_mean(ns), 4), "ndcg_std": round(_std(ns), 4),
+            "M1.5_pass": passed,
+        })
+
+# ---- 7. Report -------------------------------------------------------
+print("\n" + "=" * 72)
+print("M1.5 GATE REPORT  (mean R@20 >= 0.0925  AND  min R@20 >= 0.0890)")
+print("=" * 72)
+hdr = f"{'mode':<9}{'scale':>7}{'n':>4}{'R@20 mean':>12}{'+/-':>9}" \
+      f"{'R@20 min':>11}{'NDCG mean':>11}{'PASS':>7}"
+print(hdr)
+print("-" * len(hdr))
+for s in summary:
+    print(f"{s['mode']:<9}{s['scale']:>7}{s['n']:>4}"
+          f"{s['recall_mean']:>12.4f}{s['recall_std']:>9.4f}"
+          f"{s['recall_min']:>11.4f}{s['ndcg_mean']:>11.4f}"
+          f"{('YES' if s['M1.5_pass'] else 'no'):>7}")
+
+any_pass = any(s["M1.5_pass"] for s in summary)
+print("\n[M1.5 VERDICT]",
+      "PASS -- at least one (mode,scale) cleared the gate; "
+      "promote that config to Wave 2 (M1 / SimGCL)."
+      if any_pass else
+      "FAIL -- no (mode,scale) cleared the gate; "
+      "inspect logq_scale/clip before proceeding.")
+
+# ---- 8. Persist raw + summary for the audit trail --------------------
+out_dir = os.path.abspath(os.path.join("..", _DATASET))
+os.makedirs(out_dir, exist_ok=True)
+with open(os.path.join(out_dir, "m15_logq_sweep_runs.json"), "w") as f:
+    json.dump(all_runs, f, indent=2)
+with open(os.path.join(out_dir, "m15_logq_sweep_summary.json"), "w") as f:
+    json.dump(summary, f, indent=2)
+print(f"\nSaved -> {out_dir}/m15_logq_sweep_runs.json")
+print(f"Saved -> {out_dir}/m15_logq_sweep_summary.json")
+\end{lstlisting}
+
+\noindent\textbf{Usage notes.}
+\begin{itemize}[leftmargin=*]
+  \item The cell assumes the earlier environment-setup cell has defined
+    \texttt{DAMPS\_DIR}, \texttt{PYTHON\_EXE}, and \texttt{dataset}; if not, it falls
+    back to sensible defaults.
+  \item The \texttt{BACKBONE\_FLAGS} list reproduces the rev45 \texttt{apc\_off\_combined}
+    backbone so that the \emph{only} delta versus the validated baseline is the LogQ
+    activation, preserving causal attributability for the M1.5 ablation.
+  \item To widen the sweep into the full 24-run matrix mentioned in the audit, add
+    \texttt{"raw"} (and optionally \texttt{"sqrt"}) to \texttt{LOGQ\_MODES}; the gate
+    logic and reporting scale automatically.
+  \item Adjust the regular expressions in \texttt{\_PAT} if your \texttt{train.py}
+    prints metric keys under a different label than \texttt{BEST\_Test\_Recall@20}.
+\end{itemize}
+
+\end{document}
