@@ -1,0 +1,46 @@
+[
+  {
+    "mode": "laplace",
+    "scale": 0.05,
+    "n": 5,
+    "recall_mean": 0.0902,
+    "recall_std": 0.0023,
+    "recall_min": 0.0871,
+    "ndcg_mean": 0.0432,
+    "ndcg_std": 0.0012,
+    "M1.5_pass": false
+  },
+  {
+    "mode": "laplace",
+    "scale": 0.1,
+    "n": 5,
+    "recall_mean": 0.0879,
+    "recall_std": 0.0049,
+    "recall_min": 0.0797,
+    "ndcg_mean": 0.042,
+    "ndcg_std": 0.0028,
+    "M1.5_pass": false
+  },
+  {
+    "mode": "laplace",
+    "scale": 0.3,
+    "n": 5,
+    "recall_mean": 0.0867,
+    "recall_std": 0.0048,
+    "recall_min": 0.0791,
+    "ndcg_mean": 0.0414,
+    "ndcg_std": 0.0027,
+    "M1.5_pass": false
+  },
+  {
+    "mode": "laplace",
+    "scale": 1.0,
+    "n": 5,
+    "recall_mean": 0.091,
+    "recall_std": 0.0022,
+    "recall_min": 0.0887,
+    "ndcg_mean": 0.0436,
+    "ndcg_std": 0.0008,
+    "M1.5_pass": false
+  }
+]

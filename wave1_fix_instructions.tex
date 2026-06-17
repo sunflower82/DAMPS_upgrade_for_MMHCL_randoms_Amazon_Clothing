@@ -1,0 +1,310 @@
+\documentclass[11pt, a4paper]{article}
+
+% ====== Required Packages ======
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath, amssymb}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage[table]{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{listings}
+\usepackage{titlesec}
+
+\geometry{top=2.4cm, bottom=2.4cm, left=2.4cm, right=2.4cm, headheight=14pt}
+
+% ====== Colors ======
+\definecolor{accentblue}{RGB}{30, 80, 160}
+\definecolor{passgreen}{RGB}{198, 239, 206}
+\definecolor{warnyellow}{RGB}{255, 235, 156}
+\definecolor{warnred}{RGB}{255, 199, 206}
+\definecolor{tableheader}{RGB}{230, 236, 245}
+\definecolor{codebg}{RGB}{246, 248, 250}
+\definecolor{codekw}{RGB}{170, 13, 145}
+\definecolor{codecmt}{RGB}{0, 110, 60}
+\definecolor{codestr}{RGB}{196, 26, 22}
+
+\titleformat{\section}{\large\bfseries\color{accentblue}}{\thesection}{1em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{1em}{}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accentblue,
+  urlcolor=accentblue,
+  pdftitle={DAMPS-MMHCL Wave 1 / M1.5 -- Sweep-Cell Patch and Post-hoc Analysis Cell (Instructions)},
+}
+
+\lstdefinestyle{py}{
+  language=Python,
+  backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{codecmt}\itshape,
+  stringstyle=\color{codestr},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=8pt,
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{gray!40},
+  tabsize=4,
+  columns=fullflexible,
+  literate={->}{{$\rightarrow$}}1 {>=}{{$\geq$}}1 {<=}{{$\leq$}}1
+}
+
+\newcommand{\cmark}{\textcolor{green!60!black}{\textbf{\checkmark}}}
+\newcommand{\warnmark}{\textcolor{orange!80!black}{\textbf{!}}}
+
+\newcolumntype{Y}{>{\centering\arraybackslash}X}
+\newcolumntype{Z}{>{\raggedright\arraybackslash}X}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textit{DAMPS-MMHCL Wave 1 / M1.5 --- Patch Instructions}}
+\fancyhead[R]{\small\thepage}
+\fancyfoot[C]{\small Phase 2 Execution Hygiene Report}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+\title{%
+  \textbf{Wave 1 / M1.5 Sweep --- Notebook Patch \& Post-hoc Analysis Cell}\\[0.4em]
+  \large DAMPS-MMHCL Phase 2 Section 8.2 --- Execution Hygiene Instructions\\[0.2em]
+  \normalsize Replace the final notebook cell and append a post-hoc analysis cell
+}
+\author{DAMPS-MMHCL Research Team}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Motivation}
+% ============================================================
+While inspecting the most recent M1.5 sweep logs we found two execution-hygiene
+defects that are far more serious than the early-stopping question they were
+originally raised under:
+
+\begin{enumerate}[leftmargin=*,itemsep=4pt]
+  \item \textbf{The runs are not a real M1.5 LogQ sweep.}
+        The attached notebook (\texttt{file:103}) contains \emph{zero}
+        occurrences of \texttt{enable\_logq}, \texttt{logq\_scale}, or
+        \texttt{M1.5}. The launched command lines still consist solely of the
+        nine \texttt{-{}-damps\_*} Phase~1 flags. Worse, the log timestamps read
+        \texttt{2026-05-12}, i.e.\ they are recycled May outputs --- not fresh
+        runs with the LogQ correction. The
+        $\text{Recall@}20 \approx 0.088\text{--}0.091$ numbers therefore reflect
+        the bare rev45 baseline; no LogQ delta has been applied yet.
+  \item \textbf{Seeds are corrupted by an implicit \texttt{float} cast.}
+        The logs contain \texttt{seed=1.404632241e+09}, \texttt{seed=1.569402867e+09},
+        i.e.\ the seed was coerced to scientific-notation \texttt{float} before
+        reaching \texttt{-{}-seed}. This silently round-trips through 32-bit
+        rounding and breaks bit-level reproducibility of the sweep. The fix is
+        \texttt{str(int(seed))} at the call site.
+\end{enumerate}
+
+The early-stopping logic itself is sound. If you want runs to terminate more
+cleanly after convergence (to save GPU time), you may lower
+\texttt{early\_stopping\_patience} from \textbf{30} to \textbf{20}; this is
+optional and not required for correctness.
+
+% ============================================================
+\section{Acceptance Criteria for the Patched M1.5 Sweep}
+% ============================================================
+\begin{itemize}[leftmargin=*,itemsep=3pt]
+  \item Every launched \texttt{train.py} command must contain all five LogQ
+        flags, namely:
+\begin{lstlisting}[style=py,language=bash,numbers=none]
+--enable_logq 1
+--logq_mode {laplace, raw, sqrt}
+--logq_beta  1.0
+--logq_scale {0.05, 0.1, 0.3, 1.0}
+--logq_clip  5.0
+\end{lstlisting}
+  \item Every \texttt{-{}-seed} argument must be the string form of an integer
+        (e.g.\ \texttt{1404632241}), never scientific notation.
+  \item The M1.5 gate must be evaluated on \texttt{BEST\_Test\_Recall@20}
+        (the test-set snapshot taken at the validation-recall peak epoch),
+        \emph{not} on any mid-run epoch printout.
+  \item The per-run logger directory --- whose name embeds
+        \texttt{seed} and \texttt{ablation\_target} --- must encode
+        \texttt{(mode, scale, seed)} so configurations do not overwrite each
+        other's log files.
+  \item Validation-recall curves for every $(\text{mode}, \text{scale},
+        \text{seed})$ must be plotted post-hoc so it can be visually verified
+        that no run was terminated within $<15$ epochs of its recall peak.
+\end{itemize}
+
+% ============================================================
+\section{Part 1 -- Replace the Final Notebook Cell (M1.5 Sweep Driver)}
+% ============================================================
+Open the attached notebook and overwrite the contents of the last code cell
+(the cell titled ``Section~8.2 -- Wave~1 / M1.5 sweep driver'') with the
+script reproduced verbatim in Appendix~A
+(\texttt{cell30\_m15\_fixed.py}). The patched cell embodies five concrete
+changes relative to the previous revision:
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\rowcolors{2}{white}{tableheader!35}
+\begin{tabularx}{\textwidth}{@{}p{0.36\textwidth}Z@{}}
+\toprule
+\rowcolor{tableheader}
+\textbf{Defect in previous cell} & \textbf{Fix applied in the patched cell} \\
+\midrule
+LogQ flags missing -- launched command line is rev45 Phase~1 only &
+The constant \texttt{BACKBONE\_FLAGS} now omits LogQ; LogQ activation
+(\texttt{-{}-enable\_logq 1}, \texttt{-{}-logq\_mode}, \texttt{-{}-logq\_beta},
+\texttt{-{}-logq\_scale}, \texttt{-{}-logq\_clip}) is appended unconditionally
+inside \texttt{run\_one(mode, scale, seed)}. \\
+\texttt{seed} coerced to \texttt{float} ($\sim$\texttt{1.4e+09}) &
+\texttt{\_as\_int\_seed = lambda s: int(round(float(s)))} is applied when the
+seed list is bound, and \texttt{str(int(seed))} is used at the call site for
+\texttt{-{}-seed}. \\
+Sweep configs collide in the per-run log directory because
+\texttt{ablation\_target} is the constant \texttt{wave1\_m15\_logq} &
+\texttt{ablation\_target = f"m15\_logq\_\{mode\}\_s\{scale\}\_seed\{seed\}"}.
+This propagates into \texttt{train.py}'s \texttt{\_experiment\_paths()} and
+yields a unique directory per configuration. \\
+M1.5 gate previously read mid-run epoch metrics & Regex parser now anchors on
+the \texttt{BEST\_Test\_*} family
+(\texttt{BEST\_Test\_Recall@20}, \texttt{BEST\_Test\_NDCG@20},
+\texttt{BEST\_Test\_Precision@20}) and additionally extracts
+\texttt{BEST\_Val\_Recall\_Peak\_Epoch} /
+\texttt{BEST\_Val\_NDCG\_Peak\_Epoch} for the post-hoc audit. \\
+Runs over-train after convergence & \texttt{early\_stopping\_patience} default
+lowered from \textbf{30} to \textbf{20}; flip \texttt{BACK\_TO\_PATIENCE\_30
+= True} to reproduce the previous behaviour. \\
+\bottomrule
+\end{tabularx}
+\caption{Five defects in the previous M1.5 sweep cell and their corresponding
+fixes in the patched cell.}
+\end{table}
+
+Verbatim hyper-parameters (from \texttt{Phase 2 Section 8.2}) used by the
+patched cell:
+
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+  \item \texttt{LOGQ\_SCALES = [0.05, 0.1, 0.3, 1.0]} (four-point scale sweep);
+        \texttt{LOGQ\_MODES = ["laplace"]} (extend to \texttt{["raw","sqrt"]}
+        for the full 24-run sweep).
+  \item \texttt{N\_SEEDS = 5}; \texttt{LOGQ\_BETA = 1.0}; \texttt{LOGQ\_CLIP = 5.0}.
+  \item Acceptance gate: $\text{mean BEST\_Test\_R@20} \ge 0.0925$ \textbf{and}
+        $\min \text{BEST\_Test\_R@20} \ge 0.0890$.
+\end{itemize}
+
+\subsection*{Reporting protocol}
+When you summarise an M1.5 outcome, quote exclusively
+\texttt{BEST\_Test\_Recall@20} (the val-peak snapshot). Do \emph{not} cite
+$\text{Recall@}20$ printed on epoch 84 or 219 in the middle of a run --
+those numbers are explicitly \emph{not} the model that would be deployed under
+the \texttt{restore\_best=1} early-stopping policy.
+
+% ============================================================
+\section{Part 2 -- Append a Post-hoc Analysis Cell}
+% ============================================================
+Append the script in Appendix~B (\texttt{cell31\_m15\_analysis.py}) as the
+\textbf{new last cell} of the notebook (preceded by a level-2 Markdown header
+titled ``Wave~1 / M1.5 Sweep -- Post-hoc Analysis''). The cell is read-only:
+it never launches \texttt{train.py}; it only inspects log artefacts already
+produced by the sweep cell.
+
+\subsection*{What it does}
+\begin{enumerate}[leftmargin=*,itemsep=3pt]
+  \item Globs every directory under \texttt{../<dataset>/damps\_*} whose name
+        matches the regex below, and locates its \texttt{.txt} logger output:
+\begin{lstlisting}[style=py,language=bash,numbers=none]
+damps_.._seed=<seed>_m15_logq_<mode>_s<scale>_seed<seed>
+\end{lstlisting}
+  \item Parses each log for the trailing summary lines emitted by
+        \texttt{train.py} at the end of training, namely:
+\begin{lstlisting}[style=py,language=bash,numbers=none]
+BEST_Test_Recall@20 / NDCG@20 / Precision@20
+BEST_Val_Recall@20  / NDCG@20
+BEST_Val_Recall_Peak_Epoch
+BEST_Val_NDCG_Peak_Epoch
+\end{lstlisting}
+        plus every per-epoch diagnostic line of the form:
+\begin{lstlisting}[style=py,language=bash,numbers=none]
+Epoch N [..s + ..s]: loss=.. recall@10=.. recall@20=.. ndcg@20=..
+\end{lstlisting}
+  \item Builds a per-run audit table containing, for every
+        $(\text{mode}, \text{scale}, \text{seed})$, the
+        \texttt{BEST\_Test\_Recall@20}, the validation-recall peak epoch, the
+        last epoch reached, and the margin
+        \texttt{(last - peak)}. Any run whose margin is below 15 epochs is
+        flagged for inspection (this would be evidence that early stopping
+        cut the run short of its real peak).
+  \item Re-computes the M1.5 gate purely from the parsed logs, as a sanity
+        cross-check of the in-memory \texttt{all\_runs} dictionary built by the
+        sweep cell.
+  \item Plots, for every \texttt{logq\_scale}, the val/recall@20 curve of each
+        seed on a shared axis; overlays a dotted vertical line at the recall
+        peak, plus horizontal lines at the rollback gate ($0.0890$) and the
+        M1.5 gate ($0.0925$). The figure is saved as
+        \texttt{../<dataset>/m15\_logq\_val\_recall\_curves.png}.
+  \item Persists the parsed run dictionaries and aggregate to
+        \texttt{../<dataset>/m15\_logq\_parsed\_logs.json}.
+\end{enumerate}
+
+\subsection*{Interpreting the visual output}
+For every (scale, seed) curve, look for two patterns:
+
+\begin{itemize}[leftmargin=*,itemsep=3pt]
+  \item \cmark\ \textbf{Healthy:} the curve rises monotonically (with
+        validation noise), reaches its peak around the middle or back third of
+        the run, then plateaus or drops; the last epoch is at least 15--20
+        epochs past the peak. The dotted vertical line sits comfortably to the
+        left of the right edge. \texttt{restore\_best=1} guarantees that the
+        \emph{deployed} model is the one at the peak, not the final epoch.
+  \item \warnmark\ \textbf{Suspect:} the peak is within the last 5--10 epochs
+        of the run, i.e.\ the curve still has positive slope when training
+        ended. This would indicate the run was halted prematurely. The cell
+        flags such cases in the console output.
+\end{itemize}
+
+% ============================================================
+\section{Part 3 -- Recipe to Execute the Patch}
+% ============================================================
+\begin{enumerate}[leftmargin=*,itemsep=3pt]
+  \item Open the notebook
+        \texttt{Local\_Random\_seeds\_train\_mmhcl\_clothing\_colab\_original.ipynb}
+        in JupyterLab.
+  \item Replace the contents of the final code cell with
+        \texttt{cell30\_m15\_fixed.py} (Appendix~A).
+  \item Append a new Markdown header (\verb|## 8. Wave 1 / M1.5 Sweep -- Post-hoc Analysis|)
+        and a new code cell containing \texttt{cell31\_m15\_analysis.py}
+        (Appendix~B).
+  \item Save the notebook as
+        \texttt{Local\_Random\_seeds\_train\_mmhcl\_clothing\_colab\_rev54\_wave1\_fixed.ipynb}.
+  \item Re-run the sweep cell (the original took $\sim$20 runs $\times$ 4--6h
+        on RTX 5090). Once it finishes, run the analysis cell on the same
+        kernel.
+  \item Quote \texttt{BEST\_Test\_Recall@20} (not mid-run printouts) when
+        reporting the M1.5 gate verdict, and attach
+        \texttt{m15\_logq\_val\_recall\_curves.png} as evidence that no run
+        was terminated prematurely.
+\end{enumerate}
+
+% ============================================================
+\appendix
+\section{Appendix A -- Patched Cell (\texttt{cell30\_m15\_fixed.py})}
+% ============================================================
+\lstinputlisting[style=py]{cell30_m15_fixed.py}
+
+\newpage
+% ============================================================
+\section{Appendix B -- Post-hoc Analysis Cell (\texttt{cell31\_m15\_analysis.py})}
+% ============================================================
+\lstinputlisting[style=py]{cell31_m15_analysis.py}
+
+\end{document}
