@@ -297,6 +297,11 @@ class Trainer:
             enable_logq=bool(args.enable_logq),
             logq_scale=float(args.logq_scale),
             logq_clip=float(args.logq_clip),
+            # ---- Wave 2 / M1 -- SimGCL view-invariance ----
+            enable_simgcl=bool(args.enable_simgcl),
+            simgcl_eps=float(args.simgcl_eps),
+            simgcl_batch_size_user=int(args.simgcl_batch_size_user),
+            simgcl_batch_size_item=int(args.simgcl_batch_size_item),
         ).to(self.device)
         self.model.set_meta_categories(
             data_generator.meta_categories.to(self.device)
@@ -572,6 +577,7 @@ class Trainer:
             mf_loss = 0.0
             emb_loss = 0.0
             cl_loss = 0.0
+            view_loss = 0.0
 
             for _ in range(n_batch):
                 self.optimizer.zero_grad()
@@ -611,7 +617,19 @@ class Trainer:
                         out["u_ui_emb"], out["uu_emb"], apply_logq=False,
                     ) * args.user_loss_ratio
                     bcl = bcl_item + bcl_user
-                    batch_total = bmf + bemb + bcl
+
+                    # Wave 2 / M1 -- SimGCL view-invariance term.
+                    # simgcl_view_forward() is a hard no-op when
+                    # args.enable_simgcl=0, preserving the Wave 1
+                    # LogQ-only baseline bit-for-bit.
+                    if args.enable_simgcl:
+                        l_view = (
+                            self.model.simgcl_view_forward() * args.lambda_view
+                        )
+                    else:
+                        l_view = torch.zeros((), device=bcl_item.device)
+
+                    batch_total = bmf + bemb + bcl + l_view
 
                 # Backward (works with bfloat16 AMP — no GradScaler needed)
                 batch_total.backward()
@@ -625,6 +643,7 @@ class Trainer:
                 mf_loss += float(bmf)
                 emb_loss += float(bemb)
                 cl_loss += float(bcl)
+                view_loss += float(l_view)
 
             self.lr_scheduler.step()
 
@@ -672,6 +691,8 @@ class Trainer:
                     "train/mf_loss": mf_loss,
                     "train/emb_loss": emb_loss,
                     "train/cl_loss": cl_loss,
+                    "train/view_loss": view_loss,
+                    "loss/simgcl_view": view_loss,
                     "train/lr": self.optimizer.param_groups[0]["lr"],
                     "diag/tau": diag["tau_clamped"],
                     # 1.0 if learnable, 0.0 if static -- makes the rev44 Phase 1
@@ -689,7 +710,7 @@ class Trainer:
                 self.logger.logging(
                     f"Epoch {epoch} [{elapsed:.1f}s]: "
                     f"loss={loss:.5f}  mf={mf_loss:.5f}  emb={emb_loss:.5f}  "
-                    f"cl={cl_loss:.5f}"
+                    f"cl={cl_loss:.5f}  view={view_loss:.5f}"
                 )
                 continue
 
