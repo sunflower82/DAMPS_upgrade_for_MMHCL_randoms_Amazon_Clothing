@@ -24,7 +24,11 @@ Merge order (do each one as a separate commit for auditable diffs):
     (4)  train.py loss patch     -- add ``lambda_view * L_view`` to the
                                     total loss with a feature-flag gate.
     (5)  utility/parser.py flags -- expose ``--enable_simgcl``, ``--simgcl_eps``,
-                                    ``--lambda_view``, ``--simgcl_layers``.
+                                    ``--lambda_view``,
+                                    ``--simgcl_batch_size_user``,
+                                    ``--simgcl_batch_size_item``.
+                                    (``--simgcl_layers`` is deferred to
+                                    Wave 4 / Optuna per rev54 lines 173-176.)
     (6)  Trainer wiring          -- pass the new CLI args into the model
                                     constructor.
 
