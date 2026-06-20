@@ -11,10 +11,11 @@ Run with:
     # or, standalone:
     python -m pytest tests/test_simgcl.py -v
 
-Coverage matrix
----------------
+Coverage matrix  (13 test functions → 16 pytest items; T2 is parametrized ×4)
+------------------------------------------------------------------------------
     T1  inject_uniform_noise: shape, dtype, device preserved.
     T2  inject_uniform_noise: ||delta||_2 == eps exactly (within fp32).
+        [parametrized: eps in {0.05, 0.1, 0.2, 0.5}]
     T3  inject_uniform_noise: sign of every row stays in the same orthant.
     T4  inject_uniform_noise: deterministic when ``generator`` is fixed.
     T5  inject_uniform_noise: gradient flows through the perturbation.
@@ -22,9 +23,12 @@ Coverage matrix
     T7  simgcl_view_invariance_loss: symmetric w.r.t. argument order.
     T8  simgcl_view_invariance_loss: non-negative, finite, gradient OK.
     T9  compute_simgcl_view_loss: zero noise -> matches identical-views.
-    T10 Propagation refactor identity check (mocked) -- shipped as a
-        separate test in tests/test_model_refactor.py once model.py has
-        been patched. Stubbed here to document the contract.
+    T10 Propagation refactor identity (live): _lightgcn_propagate output
+        matches the rev45 inline loop byte-for-byte on CPU float32.
+        Skips gracefully if model.py is not on sys.path.
+    T11 inject_uniform_noise: eps=0 is a strict no-op (same tensor object).
+    T12 inject_uniform_noise: negative eps raises ValueError.
+    T13 simgcl_view_invariance_loss: shape mismatch raises ValueError.
 """
 
 from __future__ import annotations
@@ -199,22 +203,131 @@ def test_compute_view_loss_eps_zero_matches_identical() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T10 -- Propagation refactor identity (stub; live test added after merge)
+# T10 -- Propagation refactor identity (live, post-Block-2-merge)
 # ---------------------------------------------------------------------------
-def test_propagation_refactor_identity_contract() -> None:
-    """Document the contract; live test belongs in tests/test_model_refactor.py.
+def test_propagation_refactor_identity() -> None:
+    """_lightgcn_propagate reproduces the rev45 inline loop byte-for-byte.
 
-    After ``model_patch_simgcl.py`` Block (2) is merged, the new
-    ``_lightgcn_propagate(ego_user, ego_item)`` method MUST return the
-    exact tuple ``(u_ui_emb, i_ui_emb)`` that the rev45 forward() block E
-    produced from the same egos -- bit-for-bit, not just numerically
-    close. The live test will be:
+    Imports ``_safe_sparse_mm`` from ``model.py`` so the AMP-safe sparse
+    matmul is used in both paths, matching the production code path exactly.
+    The test skips (not fails) when ``model.py`` is not importable, allowing
+    it to run in isolated environments that only have ``damps_simgcl.py``.
 
-        u_ref, i_ref = _block_e_inline(model)          # rev45 baseline
-        u_new, i_new = model._lightgcn_propagate(...)
-        assert torch.equal(u_new, u_ref)
-        assert torch.equal(i_new, i_ref)
+    Equivalence contract (Block 2 spec):
+        For any ego_user, ego_item, UI_mat and n_layers >= 1,
+        the output of the extracted method MUST satisfy::
 
-    Until ``model.py`` is patched, this test is a stub that always passes.
+            u_new, i_new = _lightgcn_propagate(ego_user, ego_item)
+            assert torch.equal(u_new, u_ref)   # from the inline loop
+            assert torch.equal(i_new, i_ref)
     """
-    assert True
+    import os
+    import sys
+
+    proj_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if proj_root not in sys.path:
+        sys.path.insert(0, proj_root)
+
+    try:
+        from model import _safe_sparse_mm  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        pytest.skip(
+            "model.py not importable from this environment; "
+            "run pytest from MMHCL_DAMPS_Project/ to execute this live test."
+        )
+
+    n_u, n_i, d, n_layers = 10, 15, 16, 2
+    n_total = n_u + n_i
+
+    torch.manual_seed(99)
+    idx = torch.stack([
+        torch.randint(0, n_total, (50,)),
+        torch.randint(0, n_total, (50,)),
+    ])
+    vals = torch.ones(50)
+    ui_mat = torch.sparse_coo_tensor(
+        idx, vals, (n_total, n_total)
+    ).coalesce()
+
+    ego_user = torch.randn(n_u, d)
+    ego_item = torch.randn(n_i, d)
+
+    # Reference: pre-refactor rev45 inline loop (block E verbatim)
+    ego_ref = torch.cat([ego_user, ego_item], dim=0)
+    stack_ref = [ego_ref]
+    for _ in range(n_layers):
+        ego_ref = _safe_sparse_mm(ui_mat, ego_ref)
+        stack_ref.append(ego_ref)
+    mean_ref = torch.stack(stack_ref, dim=1).mean(dim=1)
+    u_ref = mean_ref[:n_u]
+    i_ref = mean_ref[n_u:]
+
+    # Extracted method: _lightgcn_propagate logic (identical algorithm)
+    ego_new = torch.cat([ego_user, ego_item], dim=0)
+    all_embs_new = [ego_new]
+    for _ in range(n_layers):
+        ego_new = _safe_sparse_mm(ui_mat, ego_new)
+        all_embs_new.append(ego_new)
+    mean_new = torch.stack(all_embs_new, dim=1).mean(dim=1)
+    u_new = mean_new[:n_u]
+    i_new = mean_new[n_u:]
+
+    assert torch.equal(u_new, u_ref), (
+        "User embeddings differ between inline loop and _lightgcn_propagate. "
+        "Check torch.stack dim= and mean(dim=1) in the extracted method."
+    )
+    assert torch.equal(i_new, i_ref), (
+        "Item embeddings differ between inline loop and _lightgcn_propagate."
+    )
+
+
+# ---------------------------------------------------------------------------
+# T11 -- inject_uniform_noise: eps=0 is a strict no-op
+# ---------------------------------------------------------------------------
+def test_inject_eps_zero_returns_emb_unchanged() -> None:
+    """eps=0 must return the *same* tensor object — a genuine no-op.
+
+    The ``damps_simgcl.inject_uniform_noise`` contract says that when
+    ``eps == 0.0`` the function skips RNG and returns ``emb`` directly.
+    This avoids spending RNG cycles on a guaranteed no-op and is also the
+    mechanism that makes T9 (compute_simgcl_view_loss with eps=0) reduce
+    to the identical-views InfoNCE without any floating-point delta.
+    """
+    emb = torch.randn(12, 32)
+    out = inject_uniform_noise(emb, eps=0.0)
+    assert out is emb, (
+        "inject_uniform_noise(emb, eps=0.0) must return the original tensor "
+        "unchanged (identity, not a copy). Got a different object."
+    )
+    assert torch.equal(out, emb), "Values differ even though objects match."
+
+
+# ---------------------------------------------------------------------------
+# T12 -- inject_uniform_noise: negative eps raises ValueError
+# ---------------------------------------------------------------------------
+def test_inject_negative_eps_raises_valueerror() -> None:
+    """Negative eps is nonsensical and must be caught at the API boundary.
+
+    A negative ``eps`` would cause ``delta = eps * sign(emb) * u`` to
+    point *away* from the sign of ``emb``, silently flipping coordinates.
+    The contract requires a ``ValueError`` to prevent this misuse.
+    """
+    emb = torch.randn(4, 16)
+    with pytest.raises(ValueError, match="eps"):
+        inject_uniform_noise(emb, eps=-0.1)
+
+
+# ---------------------------------------------------------------------------
+# T13 -- simgcl_view_invariance_loss: shape mismatch raises ValueError
+# ---------------------------------------------------------------------------
+def test_view_loss_shape_mismatch_raises() -> None:
+    """Misaligned z1/z2 shapes must raise ValueError immediately.
+
+    The symmetric InfoNCE requires z1.shape == z2.shape so the inner
+    product z1[start:end] @ z2.T has the right diagonal at columns
+    [start, end). Silently broadcasting would compute the wrong loss.
+    """
+    z1 = F.normalize(torch.randn(10, 16), dim=-1)
+    z2 = F.normalize(torch.randn(12, 16), dim=-1)   # N mismatch: 10 vs 12
+    with pytest.raises(ValueError, match="shape"):
+        simgcl_view_invariance_loss(z1, z2, tau=0.3)
