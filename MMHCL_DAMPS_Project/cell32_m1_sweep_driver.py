@@ -327,8 +327,123 @@ with open(out_json, "w", encoding="utf-8") as f:
     json.dump({"runs": all_runs, "summary": summary, "gate": M1_GATE}, f, indent=2)
 print(f"\n[M1] raw sweep records written to: {out_json}")
 
-# ---- 9. (Optional) close any W&B leftover from a prior cell --
+# ---- 9. W&B driver-level summary run --------------------------------
+# This section creates ONE summary W&B run for the entire M1 sweep
+# (separate from the 15 per-run training runs that each child train.py
+# process logs independently via --use_wandb 1).
+#
+# What is logged:
+#   * m1/all_runs         -- Table of all 15 (lambda_view, seed) results
+#   * m1/aggregate_table  -- Per-lambda mean/std/min Recall@20 + gate flag
+#   * m1/lam{X}/...       -- Per-lambda scalars for W&B custom charts
+#   * Summary scalars     -- gate verdict, best lambda, min-seed recall
+#   * Artifact            -- m1_sweep_results.json (machine-readable)
+# -----------------------------------------------------------------------
+print("\n[W&B] Logging M1 sweep-level summary run ...")
 try:
-    wandb.finish()
-except Exception:
-    pass
+    _wb_summary = wandb.init(
+        project=_WB_PROJECT,
+        entity=_WB_ENTITY if _WB_ENTITY else None,
+        name="m1_simgcl_sweep_summary",
+        group="wave2_m1_simgcl",
+        tags=["wave2", "m1", "simgcl", "lambda_view_sweep", "sweep_summary"],
+        job_type="sweep_summary",
+        config={
+            "phase":            "wave2_m1",
+            "lambda_views":     LAMBDA_VIEWS,
+            "simgcl_eps":       SIMGCL_EPS,
+            "logq_scale_lock":  LOGQ_SCALE_LOCK,
+            "logq_mode":        LOGQ_MODE_LOCK,
+            "logq_beta":        LOGQ_BETA_LOCK,
+            "logq_clip":        LOGQ_CLIP_LOCK,
+            "seeds":            SEEDS,
+            "n_seeds":          N_SEEDS,
+            "total_runs":       total,
+            "gate_min_recall":  GATE_MIN_RECALL,
+            "dataset":          _DATASET,
+            "backbone":         "apc_off_combined_logq",
+            "temperature":      0.3,
+            "patience":         PATIENCE,
+        },
+        reinit=True,
+    )
+
+    # ---- Table: all individual (lambda_view, seed) results ----
+    _run_cols = [
+        "lambda_view", "seed", "run_name",
+        "recall@20", "ndcg@20", "precision@20",
+        "val_recall@20", "val_ndcg@20",
+        "val_recall_peak_epoch", "val_ndcg_peak_epoch",
+        "runtime_s", "ok",
+    ]
+    _runs_table = wandb.Table(columns=_run_cols)
+    for _r in all_runs:
+        _runs_table.add_data(*[_r.get(_c) for _c in _run_cols])
+    _wb_summary.log({"m1/all_runs": _runs_table})
+
+    # ---- Table: per-lambda aggregate metrics ----
+    _agg_cols = [
+        "lambda_view", "n_seeds",
+        "mean_recall", "std_recall", "min_recall",
+        "mean_ndcg", "std_ndcg",
+        "passed",
+    ]
+    _agg_table = wandb.Table(columns=_agg_cols)
+    for _s in summary:
+        _agg_table.add_data(*[_s.get(_c) for _c in _agg_cols])
+        _lam = _s["lambda_view"]
+        # Per-lambda scalars (useful for W&B parallel-coords / line plots)
+        _wb_summary.log({
+            f"m1/lam{_lam}/recall_mean": _s["mean_recall"],
+            f"m1/lam{_lam}/recall_std":  _s["std_recall"],
+            f"m1/lam{_lam}/recall_min":  _s["min_recall"],
+            f"m1/lam{_lam}/ndcg_mean":   (_s["mean_ndcg"] or 0.0),
+            f"m1/lam{_lam}/gate_pass":   int(_s["passed"]),
+        })
+    _wb_summary.log({"m1/aggregate_table": _agg_table})
+
+    # ---- Global summary scalars ----
+    _best = (
+        max(summary, key=lambda _s: _s["mean_recall"])
+        if summary else None
+    )
+    _wb_summary.summary.update({
+        "m1/gate_passed":      M1_GATE,
+        "m1/verdict":          "PASS" if M1_GATE else "FAIL",
+        "m1/n_lambda_passing": sum(1 for _s in summary if _s["passed"]),
+        "m1/n_lambda_total":   len(summary),
+        "m1/best_lambda_view": (_best["lambda_view"] if _best else None),
+        "m1/best_recall_mean": (_best["mean_recall"] if _best else None),
+        "m1/best_ndcg_mean":   (_best["mean_ndcg"]   if _best else None),
+        "m1/min_seed_recall":  (
+            min(_s["min_recall"] for _s in summary) if summary else None
+        ),
+        "m1/wave3_carry_forward": (
+            f"lambda_view={_best['lambda_view']}" if M1_GATE and _best else "rollback"
+        ),
+    })
+
+    # ---- Artifact: machine-readable sweep JSON ----
+    _artifact = wandb.Artifact(
+        name=f"m1_simgcl_sweep_{_DATASET}",
+        type="sweep_results",
+        description=(
+            "Per-run and per-lambda results for M1 SimGCL lambda_view ablation sweep. "
+            f"Gate: {'PASS' if M1_GATE else 'FAIL'}. "
+            f"Dataset: {_DATASET}."
+        ),
+        metadata={"dataset": _DATASET, "gate": "PASS" if M1_GATE else "FAIL"},
+    )
+    _artifact.add_file(out_json, name="m1_sweep_results.json")
+    _wb_summary.log_artifact(_artifact)
+
+    _wb_summary.finish()
+    print(f"[W&B] Sweep summary run logged.")
+    print(f"[W&B] Project URL: https://wandb.ai/{_WB_ENTITY}/{_WB_PROJECT}")
+
+except Exception as _wb_err:
+    print(f"[W&B] Summary run failed (non-fatal): {_wb_err}")
+    try:
+        wandb.finish()
+    except Exception:
+        pass
