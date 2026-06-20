@@ -219,6 +219,36 @@ def parse_args() -> argparse.Namespace:
                              "exp(./τ) numerically safe.")
 
     # =====================================================================
+    #  Wave 2 / M1 -- SimGCL view-invariance (Yu et al. SIGIR 2022)
+    # =====================================================================
+    parser.add_argument(
+        "--enable_simgcl", type=int, default=0,
+        help="Master switch for the SimGCL view-invariance term. "
+             "0 = Wave 1 LogQ-only baseline (default); 1 = Wave 2 M1.",
+    )
+    parser.add_argument(
+        "--simgcl_eps", type=float, default=0.1,
+        help="Magnitude of the uniform-noise perturbation injected into "
+             "ego embeddings before LightGCN propagation. "
+             "Yu et al. (SIGIR 2022) recommend 0.1; the rev54 Optuna "
+             "search range is [0.05, 0.2].",
+    )
+    parser.add_argument(
+        "--lambda_view", type=float, default=0.05,
+        help="Weight of L_SimGCL in the total loss. The M1 ablation "
+             "sweep covers {0.01, 0.05, 0.1}; the rollback gate requires "
+             "Recall@20 >= 0.0890 on every seed for ALL three values.",
+    )
+    parser.add_argument(
+        "--simgcl_batch_size_user", type=int, default=4096,
+        help="Row-chunk size for the user-branch view-invariance loss.",
+    )
+    parser.add_argument(
+        "--simgcl_batch_size_item", type=int, default=4096,
+        help="Row-chunk size for the item-branch view-invariance loss.",
+    )
+
+    # =====================================================================
     #  Pattern B' (Scheduled Rebuild)
     # =====================================================================
     parser.add_argument("--rebuild_R", type=int, default=5,

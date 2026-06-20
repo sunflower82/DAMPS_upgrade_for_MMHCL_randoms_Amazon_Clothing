@@ -187,6 +187,11 @@ class DAMPS_MMHCL(nn.Module):
         enable_logq: bool = False,            # rev53 §3.1 — variant "h"
         logq_scale: float = 1.0,              # multiplier on log_q before subtraction
         logq_clip: float = 5.0,               # symmetric clip on scale*log_q
+        # --- Wave 2 / M1 -- SimGCL view-invariance (Yu et al. SIGIR 2022) ---
+        enable_simgcl: bool = False,          # toggles the third contrastive term
+        simgcl_eps: float = 0.1,              # noise magnitude (rev54 default 0.1)
+        simgcl_batch_size_user: int = 4096,   # row-chunk for user-branch L_view
+        simgcl_batch_size_item: int = 4096,   # row-chunk for item-branch L_view
     ) -> None:
         super().__init__()
 
@@ -413,6 +418,22 @@ class DAMPS_MMHCL(nn.Module):
         self.logq_clip: float = float(logq_clip)
         self.register_buffer("log_q", torch.zeros(n_items, dtype=torch.float32))
 
+        # ------------------------------------------------------------------
+        # 11. Wave 2 / M1 -- SimGCL view-invariance (Yu et al. SIGIR 2022)
+        # ------------------------------------------------------------------
+        # When enable_simgcl=True, a third contrastive term L_SimGCL is
+        # added to the total loss. Two perturbed LightGCN propagations are
+        # run per step; simgcl_view_forward() delegates to damps_simgcl.py.
+        # _ui_mat is a transient reference to the UI_mat passed in forward();
+        # it is cached so _lightgcn_propagate / simgcl_view_forward can
+        # be invoked within the same training step without re-receiving it.
+        # ------------------------------------------------------------------
+        self.enable_simgcl: bool = bool(enable_simgcl)
+        self.simgcl_eps: float = float(simgcl_eps)
+        self.simgcl_batch_size_user: int = int(simgcl_batch_size_user)
+        self.simgcl_batch_size_item: int = int(simgcl_batch_size_item)
+        self._ui_mat: Optional[torch.Tensor] = None
+
     # ------------------------------------------------------------------
     #  Setters & accessors
     # ------------------------------------------------------------------
@@ -527,6 +548,11 @@ class DAMPS_MMHCL(nn.Module):
                 h_aud_cal              : audio (Tiktok), else None.
                 damps_node_input       : the actual node features fed into HGCN.
         """
+        # Cache UI_mat so _lightgcn_propagate / simgcl_view_forward can
+        # reuse it within this training step without receiving it as a
+        # parameter. This is the Block 2 Wave 2 structural prerequisite.
+        self._ui_mat = UI_mat
+
         # =====================================================================
         # (A) DAMPS calibration pass (cheap: ~5 ms for N=23k on RTX 5090)
         # =====================================================================
@@ -603,15 +629,12 @@ class DAMPS_MMHCL(nn.Module):
         # (E) CF branch — LightGCN / NGCF / MF
         # =====================================================================
         if self.cf_model == "LightGCN":
-            ego = torch.cat(
-                [self.user_ui_embedding.weight, self.item_ui_embedding.weight], dim=0
+            # Delegate to the extracted method so SimGCL can reuse the
+            # same propagation path with perturbed egos (Wave 2 Block 2).
+            u_ui_emb, i_ui_emb = self._lightgcn_propagate(
+                self.user_ui_embedding.weight,
+                self.item_ui_embedding.weight,
             )
-            stack = [ego]
-            for _ in range(self.ui_layers):
-                ego = _safe_sparse_mm(UI_mat, ego)
-                stack.append(ego)
-            mean = torch.stack(stack, dim=1).mean(dim=1)
-            u_ui_emb, i_ui_emb = torch.split(mean, [self.n_users, self.n_items], dim=0)
         elif self.cf_model == "NGCF":
             ego = torch.cat(
                 [self.user_ui_embedding.weight, self.item_ui_embedding.weight], dim=0
@@ -649,6 +672,83 @@ class DAMPS_MMHCL(nn.Module):
             "h_aud_cal": h_aud_cal,
             "damps_node_signal": damps_node_signal,
         }
+
+    # ------------------------------------------------------------------
+    #  LightGCN propagation (extracted for SimGCL Wave 2 reuse)
+    # ------------------------------------------------------------------
+    def _lightgcn_propagate(
+        self,
+        ego_user: torch.Tensor,
+        ego_item: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """LightGCN propagation loop, extracted from forward() block E.
+
+        Concatenates user/item ego embeddings, runs ``self.ui_layers``
+        rounds of sparse propagation on the normalised bipartite adjacency
+        ``self._ui_mat`` (cached at the start of every forward() call),
+        layer-averages the trace, and splits the result.
+
+        This method is invoked exactly once per forward() call on the
+        anchor ego, and twice more from simgcl_view_forward() on perturbed
+        egos when SimGCL is enabled. The default forward path is bit-for-bit
+        identical to the pre-Wave-2 inline loop.
+
+        Args:
+            ego_user : (n_users, d) user ego embeddings.
+            ego_item : (n_items, d) item ego embeddings.
+
+        Returns:
+            Tuple (u_ui_emb, i_ui_emb) after LightGCN propagation and
+            layer averaging.
+
+        Raises:
+            RuntimeError : if called before forward() has set self._ui_mat.
+        """
+        if self._ui_mat is None:
+            raise RuntimeError(
+                "_lightgcn_propagate called before forward() cached _ui_mat. "
+                "This should never happen during normal training."
+            )
+        ego = torch.cat([ego_user, ego_item], dim=0)         # (n_u + n_i, d)
+        all_embs = [ego]
+        for _ in range(self.ui_layers):
+            ego = _safe_sparse_mm(self._ui_mat, ego)
+            all_embs.append(ego)
+        mean = torch.stack(all_embs, dim=1).mean(dim=1)      # LightGCN avg
+        return mean[:self.n_users], mean[self.n_users:]
+
+    # ------------------------------------------------------------------
+    #  SimGCL view-invariance forward (Wave 2 / M1)
+    # ------------------------------------------------------------------
+    def simgcl_view_forward(self) -> torch.Tensor:
+        """Compute L_SimGCL = (1/2)(L_view^user + L_view^item).
+
+        Two perturbed LightGCN propagations are run with fresh uniform
+        noise (Yu et al. SIGIR 2022, eq. 4); the output is a scalar
+        tensor with gradient flow into the ego embedding parameters. The
+        caller (train.py) is responsible for multiplying by lambda_view
+        before adding to the total loss.
+
+        Returns:
+            Scalar loss tensor. Returns 0.0 (no grad) when
+            enable_simgcl=False so bracketing this call in the training
+            loop is unconditionally safe.
+        """
+        if not self.enable_simgcl:
+            return torch.zeros(
+                (), device=self.user_ui_embedding.weight.device
+            )
+        from damps_simgcl import compute_simgcl_view_loss  # pylint: disable=import-outside-toplevel
+
+        return compute_simgcl_view_loss(
+            propagate_fn=self._lightgcn_propagate,
+            ego_user=self.user_ui_embedding.weight,
+            ego_item=self.item_ui_embedding.weight,
+            eps=self.simgcl_eps,
+            tau=self.tau,
+            batch_size_user=self.simgcl_batch_size_user,
+            batch_size_item=self.simgcl_batch_size_item,
+        )
 
     # ------------------------------------------------------------------
     #  Contrastive Loss (Learnable τ — Section 3.1 of the spec)
