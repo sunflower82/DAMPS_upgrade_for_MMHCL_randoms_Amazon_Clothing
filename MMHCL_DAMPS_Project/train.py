@@ -302,6 +302,11 @@ class Trainer:
             simgcl_eps=float(args.simgcl_eps),
             simgcl_batch_size_user=int(args.simgcl_batch_size_user),
             simgcl_batch_size_item=int(args.simgcl_batch_size_item),
+            # ---- Branch A (rev55 §8.1) ----
+            branchA_view_every_k=int(args.branchA_view_every_k),
+            branchA_bcl_batchn=bool(args.branchA_bcl_batchn),
+            branchA_view_bsz=int(args.branchA_view_bsz),
+            branchA_bcl_bsz=int(args.branchA_bcl_bsz),
         ).to(self.device)
         self.model.set_meta_categories(
             data_generator.meta_categories.to(self.device)
@@ -624,7 +629,8 @@ class Trainer:
                     # LogQ-only baseline bit-for-bit.
                     if args.enable_simgcl:
                         l_view = (
-                            self.model.simgcl_view_forward() * args.lambda_view
+                            self.model.simgcl_view_forward(epoch=epoch)
+                            * args.lambda_view
                         )
                     else:
                         l_view = torch.zeros((), device=bcl_item.device)

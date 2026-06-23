@@ -249,6 +249,42 @@ def parse_args() -> argparse.Namespace:
     )
 
     # =====================================================================
+    #  Branch A -- speedup overlays for Wave 2 SimGCL (rev55 §8.1)
+    # =====================================================================
+    parser.add_argument(
+        "--branchA_view_every_k", type=int, default=2,
+        help="Compute the SimGCL view-invariance loss every K epochs and "
+             "reuse the cached perturbed views on the off-epochs. "
+             "K=1 reproduces the dense Wave 2 schedule; K=2 halves the "
+             "number of perturbed LightGCN propagations and is the "
+             "Branch A default. Set K=1 for the S2 bit-for-bit smoke "
+             "test against Wave 1.",
+    )
+    parser.add_argument(
+        "--branchA_bcl_batchn", type=int, default=1,
+        help="1 = replace the (B, N) chunked InfoNCE in "
+             "batched_contrastive_loss with a batch-N InfoNCE that "
+             "compares each anchor against the (B-1) other rows of the "
+             "mini-batch (Branch A default; ~22x FLOPs reduction on "
+             "Amazon-Clothing). 0 = keep the legacy (B, N) path used in "
+             "Wave 1 / Wave 2 audit runs.",
+    )
+    parser.add_argument(
+        "--branchA_view_bsz", type=int, default=2048,
+        help="Row-chunk size used by the Branch A batch-N SimGCL view "
+             "loss. Must be <= simgcl_batch_size_user / "
+             "simgcl_batch_size_item; the 2048 default keeps the per-chunk "
+             "(B, B) Gram matrix under 16 MB FP32.",
+    )
+    parser.add_argument(
+        "--branchA_bcl_bsz", type=int, default=2048,
+        help="Row-chunk size used by the Branch A batch-N bcl_item "
+             "contrastive loss when --branchA_bcl_batchn=1. Trades VRAM "
+             "for throughput; 2048 matches the SimGCL chunk for cache "
+             "reuse on a single A100 / RTX 4090.",
+    )
+
+    # =====================================================================
     #  Pattern B' (Scheduled Rebuild)
     # =====================================================================
     parser.add_argument("--rebuild_R", type=int, default=5,

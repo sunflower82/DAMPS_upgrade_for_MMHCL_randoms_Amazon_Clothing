@@ -192,6 +192,11 @@ class DAMPS_MMHCL(nn.Module):
         simgcl_eps: float = 0.1,              # noise magnitude (rev54 default 0.1)
         simgcl_batch_size_user: int = 4096,   # row-chunk for user-branch L_view
         simgcl_batch_size_item: int = 4096,   # row-chunk for item-branch L_view
+        # ---- Branch A (rev55 §8.1) -- speedup levers ----
+        branchA_view_every_k: int = 2,
+        branchA_bcl_batchn: bool = True,
+        branchA_view_bsz: int = 2048,
+        branchA_bcl_bsz: int = 2048,
     ) -> None:
         super().__init__()
 
@@ -432,6 +437,13 @@ class DAMPS_MMHCL(nn.Module):
         self.simgcl_eps: float = float(simgcl_eps)
         self.simgcl_batch_size_user: int = int(simgcl_batch_size_user)
         self.simgcl_batch_size_item: int = int(simgcl_batch_size_item)
+        # ---- Branch A (rev55 §8.1) -- speedup levers ----
+        self.branchA_view_every_k: int = int(branchA_view_every_k)
+        self.branchA_bcl_batchn: bool = bool(branchA_bcl_batchn)
+        self.branchA_view_bsz: int = int(branchA_view_bsz)
+        self.branchA_bcl_bsz: int = int(branchA_bcl_bsz)
+        self._simgcl_view_cache: Optional[tuple] = None
+        self._simgcl_view_epoch: int = -1
         self._ui_mat: Optional[torch.Tensor] = None
 
     # ------------------------------------------------------------------
@@ -720,35 +732,70 @@ class DAMPS_MMHCL(nn.Module):
     # ------------------------------------------------------------------
     #  SimGCL view-invariance forward (Wave 2 / M1)
     # ------------------------------------------------------------------
-    def simgcl_view_forward(self) -> torch.Tensor:
-        """Compute L_SimGCL = (1/2)(L_view^user + L_view^item).
+    def simgcl_view_forward(self, epoch: int = 0) -> torch.Tensor:
+        """Compute L_SimGCL = 0.5 * (L_user + L_item) with view-cache reuse.
 
-        Two perturbed LightGCN propagations are run with fresh uniform
-        noise (Yu et al. SIGIR 2022, eq. 4); the output is a scalar
-        tensor with gradient flow into the ego embedding parameters. The
-        caller (train.py) is responsible for multiplying by lambda_view
-        before adding to the total loss.
+        Branch A (rev55 §8.1) augments the rev54 helper with batch-N InfoNCE
+        and epoch-aware view caching via ``branchA_view_every_k``.
+
+        Args:
+            epoch: Current training epoch index, supplied by train.py.
 
         Returns:
-            Scalar loss tensor. Returns 0.0 (no grad) when
-            enable_simgcl=False so bracketing this call in the training
-            loop is unconditionally safe.
+            Scalar loss tensor with gradient flow into ego embeddings.
         """
         if not self.enable_simgcl:
             return torch.zeros(
                 (), device=self.user_ui_embedding.weight.device
             )
-        from damps_simgcl import compute_simgcl_view_loss  # pylint: disable=import-outside-toplevel
 
-        return compute_simgcl_view_loss(
-            propagate_fn=self._lightgcn_propagate,
-            ego_user=self.user_ui_embedding.weight,
-            ego_item=self.item_ui_embedding.weight,
-            eps=self.simgcl_eps,
-            tau=self.tau,
-            batch_size_user=self.simgcl_batch_size_user,
-            batch_size_item=self.simgcl_batch_size_item,
+        from branchA_simgcl_batchN import (  # pylint: disable=import-outside-toplevel
+            compute_simgcl_view_loss,
+            inject_uniform_noise,
         )
+
+        refresh = (
+            self._simgcl_view_cache is None
+            or (
+                epoch != self._simgcl_view_epoch
+                and (epoch % self.branchA_view_every_k == 0)
+            )
+        )
+
+        if refresh or self._simgcl_view_cache is None:
+            loss, views = compute_simgcl_view_loss(
+                propagate_fn=self._lightgcn_propagate,
+                ego_user=self.user_ui_embedding.weight,
+                ego_item=self.item_ui_embedding.weight,
+                eps=self.simgcl_eps,
+                tau=self.tau,
+                batch_size_user=self.branchA_view_bsz,
+                batch_size_item=self.branchA_view_bsz,
+                views_cached=None,
+            )
+            self._simgcl_view_cache = tuple(v.detach() for v in views)
+            self._simgcl_view_epoch = epoch
+        else:
+            ego_u = self.user_ui_embedding.weight
+            ego_i = self.item_ui_embedding.weight
+            u_pert = inject_uniform_noise(ego_u, self.simgcl_eps)
+            i_pert = inject_uniform_noise(ego_i, self.simgcl_eps)
+            u_now, i_now = self._lightgcn_propagate(u_pert, i_pert)
+            u_now = F.normalize(u_now, dim=-1)
+            i_now = F.normalize(i_now, dim=-1)
+            u_cached, _, i_cached, _ = self._simgcl_view_cache
+            views_paired = (u_now, u_cached, i_now, i_cached)
+            loss, _ = compute_simgcl_view_loss(
+                propagate_fn=self._lightgcn_propagate,
+                ego_user=ego_u,
+                ego_item=ego_i,
+                eps=self.simgcl_eps,
+                tau=self.tau,
+                batch_size_user=self.branchA_view_bsz,
+                batch_size_item=self.branchA_view_bsz,
+                views_cached=views_paired,
+            )
+        return loss
 
     # ------------------------------------------------------------------
     #  Contrastive Loss (Learnable τ — Section 3.1 of the spec)
@@ -786,6 +833,24 @@ class DAMPS_MMHCL(nn.Module):
               log_q is an item-popularity prior; applying it on users would
               double-count user activity bias.
         """
+        # ---- Branch A (rev55 §8.1) -- batch-N variant for speed ----
+        if getattr(self, "branchA_bcl_batchn", False):
+            from branchA_simgcl_batchN import (  # pylint: disable=import-outside-toplevel
+                batched_contrastive_loss_batchN,
+            )
+            log_q_arg = self.log_q if (self.enable_logq and apply_logq) else None
+            return batched_contrastive_loss_batchN(
+                z1=z1,
+                z2=z2,
+                tau=self.tau,
+                batch_size=self.branchA_bcl_bsz,
+                apply_logq=bool(self.enable_logq and apply_logq),
+                log_q=log_q_arg,
+                logq_scale=float(self.logq_scale),
+                logq_clip=float(self.logq_clip),
+            )
+        # ---- (else: fall through to the rev54 all-rank implementation) ----
+
         device = z1.device
         num_nodes = z1.size(0)
         num_batches = (num_nodes - 1) // batch_size + 1
