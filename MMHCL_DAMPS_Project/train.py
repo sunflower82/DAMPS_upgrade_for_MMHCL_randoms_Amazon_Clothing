@@ -519,6 +519,16 @@ class Trainer:
                 init_kwargs["entity"] = args.wandb_entity
             if args.wandb_run_name:
                 init_kwargs["name"] = args.wandb_run_name
+            if getattr(args, "wandb_group", ""):
+                init_kwargs["group"] = args.wandb_group
+            if getattr(args, "wandb_tags", ""):
+                init_kwargs["tags"] = [
+                    t.strip()
+                    for t in args.wandb_tags.split(",")
+                    if t.strip()
+                ]
+            if getattr(args, "wandb_job_type", ""):
+                init_kwargs["job_type"] = args.wandb_job_type
             self.wandb.init(**init_kwargs)
 
             # ----- Make ``epoch`` the canonical X-axis for every chart -----

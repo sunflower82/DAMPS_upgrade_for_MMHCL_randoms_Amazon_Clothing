@@ -161,6 +161,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb_project", type=str, default="damps-mmhcl")
     parser.add_argument("--wandb_entity", type=str, default="")
     parser.add_argument("--wandb_run_name", type=str, default="")
+    parser.add_argument(
+        "--wandb_group", type=str, default="",
+        help="W&B run group; groups related runs together in the W&B UI "
+             "(e.g. 'wave2_branchA'). Empty string = no group.",
+    )
+    parser.add_argument(
+        "--wandb_tags", type=str, default="",
+        help="Comma-separated W&B tags attached to the run "
+             "(e.g. 'branchA,batchN,rev55'). Empty string = no tags.",
+    )
+    parser.add_argument(
+        "--wandb_job_type", type=str, default="",
+        help="W&B job_type label (e.g. 'train', 'sweep_seed'). "
+             "Empty string = W&B default.",
+    )
 
     # =====================================================================
     #  DAMPS-Specific (Revision 9)
