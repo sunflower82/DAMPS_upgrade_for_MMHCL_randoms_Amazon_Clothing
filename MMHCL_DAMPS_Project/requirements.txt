@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # DAMPS-MMHCL -- pip dependencies
 # =============================================================================
 # Required deps cover the locked Revision 9 architecture; OPTIONAL deps unlock
@@ -20,6 +20,7 @@ tqdm>=4.65.0
 
 # Weights & Biases experiment tracking + Bayesian sweeps (Speedup S7).
 # wandb>=0.15.0
+# nbformat>=5.7.0      # Required by wandb to save notebook history in Jupyter/Colab.
 # pyyaml>=6.0          # Required by run_wandb_sweep.py to parse the YAML.
 
 # FAISS GPU mandatory fallback for K-NN when N >= 60_000 (Speedup S2).
@@ -29,3 +30,4 @@ tqdm>=4.65.0
 
 # Optional readability sugar for tensor reshapes (Speedup S10).
 # einops>=0.7.0
+
