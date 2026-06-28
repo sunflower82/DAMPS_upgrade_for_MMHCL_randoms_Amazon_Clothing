@@ -8,7 +8,7 @@
 #  Frozen Wave-1 constraints (DO NOT TOUCH):
 #    --enable_logq 1 --logq_scale 1.0 --logq_clip 5.0  (laplace mode default,
 #                                                       beta=1.0 inside model)
-#    --patience 20
+#    --early_stopping_patience 20
 #    Backbone:  apc_off_combined  (set in your config / model defaults)
 #    Dataset:   Amazon-Sports  5-core  8:1:1
 #
@@ -20,7 +20,7 @@
 #    --branchA_bcl_bsz  2048      (bcl_item chunk)
 #    --use_amp 1                  (bfloat16, already wired in train.py:566)
 #
-#  Acceptance window (rev55 §8.1): R@20 in [0.0900, 0.0945].
+#  Acceptance window (rev55 8.1, Sports): R@20 in [0.0600, 0.0800].
 # =============================================================================
 
 set -euo pipefail
@@ -67,7 +67,7 @@ python -u train.py \
     --seed               "${SEED}" \
     --batch_size         "${BATCH_SIZE}" \
     --epoch              "${EPOCH}" \
-    --patience           "${PATIENCE}" \
+    --early_stopping_patience "${PATIENCE}" \
     --lr                 "${LR}" \
     --use_amp            1 \
     --enable_logq        1 \
