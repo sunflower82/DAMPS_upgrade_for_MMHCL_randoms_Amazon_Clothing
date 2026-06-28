@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # =============================================================================
 #  Branch A — single-seed runner (rev55 §8.1, Wave 2 Phase 2)
 # =============================================================================
@@ -10,7 +10,7 @@
 #                                                       beta=1.0 inside model)
 #    --patience 20
 #    Backbone:  apc_off_combined  (set in your config / model defaults)
-#    Dataset:   Amazon-Clothing  5-core  8:1:1
+#    Dataset:   Amazon-Sports  5-core  8:1:1
 #
 #  Branch A overlays (rev55 §8.1):
 #    --enable_simgcl 1 --simgcl_eps 0.1 --lambda_view 0.05
@@ -29,7 +29,7 @@ set -euo pipefail
 #  Configurable knobs (CLI overrides via env vars)
 # -----------------------------------------------------------------------------
 SEED="${SEED:-0}"
-DATASET="${DATASET:-clothing}"
+DATASET="${DATASET:-sports}"
 BATCH_SIZE="${BATCH_SIZE:-4096}"
 EPOCH="${EPOCH:-500}"
 PATIENCE="${PATIENCE:-20}"
