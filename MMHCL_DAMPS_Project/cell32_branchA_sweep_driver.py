@@ -221,6 +221,7 @@ for idx, seed in enumerate(SEEDS, start=1):
 
 recalls = [r["recall@20"] for r in all_runs if r["recall@20"] is not None]
 ndcgs = [r["ndcg@20"] for r in all_runs if r["ndcg@20"] is not None]
+precisions = [r["precision@20"] for r in all_runs if r["precision@20"] is not None]
 
 
 def _mean(xs: list[float]) -> float:
@@ -244,21 +245,27 @@ gate_fail_rollback = any(r < GATE_FAIL_BELOW for r in recalls)
 
 print()
 print("=" * 72)
-print(f"{'seed':>8} {'R@20':>10} {'N@20':>10} {'hours':>8} {'window':>8}")
-print("-" * 72)
+print(f"{'seed':>8} {'R@20':>10} {'N@20':>10} {'P@20':>10} {'hours':>8} {'window':>8}")
+print("-" * 80)
 for r in all_runs:
     flag = "PASS" if r.get("in_window") else "FAIL"
     print(
         f"{r['seed']:>8} "
         f"{(r['recall@20'] or 0):>10.6f} "
         f"{(r['ndcg@20'] or 0):>10.6f} "
+        f"{(r['precision@20'] or 0):>10.6f} "
         f"{r['runtime_h']:>8.2f} "
         f"{flag:>8}"
     )
-print("-" * 72)
+print("-" * 80)
 print(
     f"mean R@20 = {mean_r:.6f} +/- {_std(recalls):.6f}  "
     f"min={min_r:.6f}  max={max_r:.6f}"
+)
+print(
+    f"mean P@20 = {_mean(precisions):.6f} +/- {_std(precisions):.6f}  "
+    f"min={min(precisions) if precisions else float('nan'):.6f}  "
+    f"max={max(precisions) if precisions else float('nan'):.6f}"
 )
 print(
     f"[BranchA] gate [{GATE_MIN_RECALL}, {GATE_MAX_RECALL}]: "
@@ -282,6 +289,8 @@ summary = {
     "min_recall": round(min_r, 6),
     "max_recall": round(max_r, 6),
     "mean_ndcg": round(_mean(ndcgs), 6) if ndcgs else None,
+    "mean_precision": round(_mean(precisions), 6) if precisions else None,
+    "std_precision": round(_std(precisions), 6) if precisions else None,
     "gate_pass": gate_pass,
 }
 with open(out_json, "w", encoding="utf-8") as f:
@@ -311,6 +320,8 @@ try:
         "branchA/mean_recall": mean_r,
         "branchA/std_recall": _std(recalls),
         "branchA/min_recall": min_r,
+        "branchA/mean_precision": _mean(precisions) if precisions else float("nan"),
+        "branchA/std_precision": _std(precisions) if precisions else float("nan"),
         "branchA/gate_pass": int(gate_pass),
     })
     _wb.summary.update({"branchA/gate_passed": gate_pass})
