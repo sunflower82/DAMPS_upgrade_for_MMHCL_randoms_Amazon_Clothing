@@ -566,8 +566,9 @@ class Trainer:
         # improvement, which would be wrong whenever the final improvement was
         # ndcg-only or recall-only.
         # ------------------------------------------------------------------
-        best_val_recall: float = 0.0   # max of val/recall@Ks[-1]
-        best_val_ndcg: float = 0.0     # max of val/ndcg@Ks[-1]
+        best_val_recall: float = 0.0      # max of val/recall@Ks[-1]
+        best_val_ndcg: float = 0.0        # max of val/ndcg@Ks[-1]
+        best_val_precision: float = 0.0   # max of val/precision@Ks[-1]
         best_val_recall_epoch: int = -1   # epoch at which best_val_recall was reached
         best_val_ndcg_epoch: int = -1     # epoch at which best_val_ndcg was reached
         best_val_at_recall_peak: Optional[dict[str, Any]] = None
@@ -744,10 +745,17 @@ class Trainer:
                 f"ndcg@{Ks[-1]}={val['ndcg'][-1]:.5f}"
             )
 
+            best_val_precision = max(
+                best_val_precision, float(val["precision"][-1])
+            )
             if self.wandb is not None:
                 # NOTE: ``val/ndcg@{Ks[0]}`` (i.e. NDCG@10) is logged here in
                 # addition to the @20 cut-off so the WandB ``val`` section
                 # surfaces both NDCG charts side by side.
+                # ``best_precision`` is the running maximum of
+                # val/precision@Ks[-1] up to the current epoch, mirroring the
+                # ``best_recall`` / ``best_ndcg`` series visible in the
+                # Workspace Charts.
                 self.wandb.log({
                     "epoch": epoch,
                     f"val/recall@{Ks[0]}": val["recall"][0],
@@ -756,6 +764,7 @@ class Trainer:
                     f"val/ndcg@{Ks[-1]}": val["ndcg"][-1],
                     f"val/precision@{Ks[-1]}": val["precision"][-1],
                     f"val/hit@{Ks[-1]}": val["hit_ratio"][-1],
+                    "best_precision": best_val_precision,
                 })
 
             if self.reduce_lr_scheduler is not None:
@@ -904,6 +913,9 @@ class Trainer:
                 self.wandb.summary["best_val_ndcg_peak_epoch"] = (
                     best_val_ndcg_epoch
                 )
+            self.wandb.summary[f"best_val_precision@{Ks[-1]}"] = (
+                best_val_precision
+            )
             if test_at_recall_peak is not None:
                 self.wandb.summary[f"best_test_recall@{Ks[-1]}"] = float(
                     test_at_recall_peak["recall"][1]
