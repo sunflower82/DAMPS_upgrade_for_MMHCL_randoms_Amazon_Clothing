@@ -87,7 +87,7 @@ print(f"[BranchA] view_every_k={VIEW_EVERY_K}  bcl_batchn={USE_BCL_BATCHN}")
 BACKBONE_FLAGS: list[str] = [
     "--dataset", str(_DATASET),
     "--gpu_id", "0",
-    "--epoch", "500",
+    "--epoch", "250",
     "--verbose", "5",
     "--batch_size", "4096",
     "--lr", "0.001",
