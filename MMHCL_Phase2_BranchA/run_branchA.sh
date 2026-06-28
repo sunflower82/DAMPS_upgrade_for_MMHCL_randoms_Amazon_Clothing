@@ -31,7 +31,7 @@ set -euo pipefail
 SEED="${SEED:-0}"
 DATASET="${DATASET:-clothing}"
 BATCH_SIZE="${BATCH_SIZE:-4096}"
-EPOCH="${EPOCH:-500}"
+EPOCH="${EPOCH:-250}"
 PATIENCE="${PATIENCE:-20}"
 LR="${LR:-1e-3}"
 LAMBDA_VIEW="${LAMBDA_VIEW:-0.05}"
