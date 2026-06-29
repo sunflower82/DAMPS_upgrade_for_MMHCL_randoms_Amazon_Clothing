@@ -566,9 +566,16 @@ class Trainer:
         # improvement, which would be wrong whenever the final improvement was
         # ndcg-only or recall-only.
         # ------------------------------------------------------------------
-        best_val_recall: float = 0.0      # max of val/recall@Ks[-1]
-        best_val_ndcg: float = 0.0        # max of val/ndcg@Ks[-1]
+        best_val_recall: float = 0.0      # max of val/recall@Ks[-1] [early-stop + peak snapshot]
+        best_val_ndcg: float = 0.0        # max of val/ndcg@Ks[-1]  [early-stop + peak snapshot]
         best_val_precision: float = 0.0   # max of val/precision@Ks[-1]
+        # Unconditional running maxima logged to WandB every eval epoch.
+        # Unlike best_val_recall/best_val_ndcg, these are updated regardless
+        # of the early-stopping min_delta gate, so WandB always tracks the
+        # true curve maximum even when the improvement is smaller than
+        # early_stopping_min_delta.
+        running_best_recall: float = 0.0
+        running_best_ndcg: float = 0.0
         best_val_recall_epoch: int = -1   # epoch at which best_val_recall was reached
         best_val_ndcg_epoch: int = -1     # epoch at which best_val_ndcg was reached
         best_val_at_recall_peak: Optional[dict[str, Any]] = None
@@ -748,14 +755,23 @@ class Trainer:
             best_val_precision = max(
                 best_val_precision, float(val["precision"][-1])
             )
+            # Update unconditional running maxima every eval epoch so that
+            # WandB always reflects the true curve maximum, independent of
+            # whether the early-stopping min_delta gate fired.
+            running_best_recall = max(
+                running_best_recall, float(val["recall"][-1])
+            )
+            running_best_ndcg = max(
+                running_best_ndcg, float(val["ndcg"][-1])
+            )
             if self.wandb is not None:
                 # NOTE: ``val/ndcg@{Ks[0]}`` (i.e. NDCG@10) is logged here in
                 # addition to the @20 cut-off so the WandB ``val`` section
                 # surfaces both NDCG charts side by side.
-                # ``best_precision`` is the running maximum of
-                # val/precision@Ks[-1] up to the current epoch, mirroring the
-                # ``best_recall`` / ``best_ndcg`` series visible in the
-                # Workspace Charts.
+                # ``best_precision``, ``best_recall``, and ``best_ndcg`` are
+                # unconditional running maxima updated every eval epoch; they
+                # are NOT gated by early_stopping_min_delta, so the WandB
+                # chart always tracks the true maximum of each val curve.
                 self.wandb.log({
                     "epoch": epoch,
                     f"val/recall@{Ks[0]}": val["recall"][0],
@@ -765,6 +781,8 @@ class Trainer:
                     f"val/precision@{Ks[-1]}": val["precision"][-1],
                     f"val/hit@{Ks[-1]}": val["hit_ratio"][-1],
                     "best_precision": best_val_precision,
+                    "best_recall": running_best_recall,
+                    "best_ndcg": running_best_ndcg,
                 })
 
             if self.reduce_lr_scheduler is not None:
@@ -832,8 +850,6 @@ class Trainer:
                         f"test/recall@{Ks[-1]}": test_ret["recall"][1],
                         f"test/ndcg@{Ks[-1]}": test_ret["ndcg"][1],
                         f"test/precision@{Ks[-1]}": test_ret["precision"][1],
-                        "best_recall": best_val_recall,
-                        "best_ndcg": best_val_ndcg,
                     })
                 stopping_step = 0
                 if args.early_stopping_restore_best:
