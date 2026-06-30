@@ -324,7 +324,11 @@ def _run_one_seed(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
+        # encoding + errors: cp1252 (Windows default) cannot decode every
+        # UTF-8 byte from train.py output; force UTF-8 with replacement so
+        # the log reader never crashes on a unicode character.
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
         env={
             **os.environ,
