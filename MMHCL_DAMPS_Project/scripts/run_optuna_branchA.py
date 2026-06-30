@@ -326,7 +326,14 @@ def _run_one_seed(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        env={
+            **os.environ,
+            "PYTHONUNBUFFERED": "1",
+            # Disable WandB network sync inside each trial subprocess.
+            # Optuna tracks metrics via log-file streaming; WandB online
+            # init adds 90 s of network overhead per trial and can time out.
+            "WANDB_DISABLED": "true",
+        },
     )
 
     captured: list[str] = []
