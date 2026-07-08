@@ -517,8 +517,11 @@ class Trainer:
             }
             if args.wandb_entity:
                 init_kwargs["entity"] = args.wandb_entity
-            if args.wandb_run_name:
-                init_kwargs["name"] = args.wandb_run_name
+            _effective_run_name = (
+                getattr(args, "wandb_name", "") or args.wandb_run_name
+            )
+            if _effective_run_name:
+                init_kwargs["name"] = _effective_run_name
             if getattr(args, "wandb_group", ""):
                 init_kwargs["group"] = args.wandb_group
             if getattr(args, "wandb_tags", ""):
