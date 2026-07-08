@@ -1,0 +1,42 @@
+---
+alwaysApply: true
+---
+
+---
+description: Core research context for Multimodal RecSys + GPFQ project
+alwaysApply: true
+---
+
+# Research Context
+
+## Project Goal
+Develop quantization-aware multimodal recommendation system combining:
+- GPFQ (Greedy Path-Following Quantization) for weight compression
+- Graph Convolutional Networks with multimodal features (visual + text + ID)
+- Contrastive learning with denoising for robust representations
+
+## Algorithm Overview
+GPFQ dynamical system:
+- u_t = u_{t-1} + w_t*X_t - q_t*X_t  (error accumulation)
+- q_t = Q(w_t + X_t^T * u_{t-1} / ||X_t||^2)  (greedy quantization)
+- Stability theorem: ||u_N||_2 decays as sqrt(log N / m) w.h.p.
+- Goal: minimize ||XW - XQ||_F, not ||W - Q||_F
+
+## Multimodal GCN Architecture
+- Graph: G = (Users, Items, Edges from interactions)
+- Node features: visual (CLIP-ViT-L/14), text (BERT-base), ID (learnable)
+- Graph conv: H^(l+1) = sigma(D^{-1/2} A D^{-1/2} H^(l) W^(l))
+- Fusion: late fusion with attention-weighted combination
+- Loss: BPR + InfoNCE (temperature=0.2)
+
+## Datasets
+- Amazon Baby, Sports, Clothing (standard splits)
+- Evaluation: Recall@10, NDCG@10 (top-K filtering seen items)
+
+## Code Repository Structure
+- src/models/gpfq_quantizer.py    — GPFQ core algorithm
+- src/models/multimodal_gnn.py    — GCN with multimodal fusion
+- src/models/contrastive.py       — InfoNCE + denoising losses
+- src/data/amazon_loader.py       — Dataset loading pipeline
+- src/train/trainer.py            — Training loop (PyTorch Lightning)
+- src/train/evaluator.py          — Recall@K, NDCG@K metrics

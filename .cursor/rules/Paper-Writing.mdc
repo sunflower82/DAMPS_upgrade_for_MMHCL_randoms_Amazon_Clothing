@@ -1,0 +1,58 @@
+---
+alwaysApply: true
+---
+
+---
+description: Rules for generating LaTeX, paper sections, and mathematical proofs
+alwaysApply: false
+---
+
+# Paper Writing Rules
+
+## When helping with LaTeX/paper content:
+- Follow NeurIPS/ICML formatting conventions
+- Theorem/Lemma/Corollary environments với proof environment
+- Cite related work trong Related Work section format: \citet{} for subject, \citep{} for parenthetical
+
+## Mathematical Notation (consistent với paper)
+- Bold lowercase for vectors: \mathbf{u}, \mathbf{w}, \mathbf{x}
+- Bold uppercase for matrices: \mathbf{X}, \mathbf{W}, \mathbf{Q}
+- Calligraphic for sets/alphabets: \mathcal{A}, \mathcal{G}
+- Norms: \|\cdot\|_2 for L2, \|\cdot\|_F for Frobenius
+
+## Proof Style
+- Start với "Proof." và end với \qed hoặc \blacksquare
+- Number equations that are referenced: \begin{equation}\label{eq:gpfq_update}
+- State all assumptions explicitly before theorem
+
+## Tables (Required Rules)
+- ALL tables MUST use full borders on every cell — use `\hline` for horizontal and `|` column separators for vertical borders
+- Column spec format: always `|c|c|c|` (with leading and trailing `|`), never `ccc` without borders
+- Add `\hline` at top (before first row), after header row, and at bottom (after last row)
+- For multi-row or multi-column cells: use `\multicolumn{n}{|c|}{text}` to preserve side borders
+- Required preamble package: `\usepackage{booktabs}` is NOT used alone — pair with explicit `|` and `\hline` for full-border style
+- Bold the header row: wrap each header cell in `\textbf{}`
+
+Example — correct full-border table:
+```latex
+\begin{table}[h]
+\centering
+\caption{Performance comparison on Amazon Clothing.}
+\label{tab:main_results}
+\begin{tabular}{|c|c|c|c|}
+\hline
+\textbf{Method} & \textbf{Recall@20} & \textbf{NDCG@20} & \textbf{Precision@20} \\
+\hline
+MMHCL            & 0.0881 & 0.0394 & 0.0045 \\
+\hline
+DAMPS-MMHCL      & \textbf{0.0895} & \textbf{0.0401} & \textbf{0.0046} \\
+\hline
+\end{tabular}
+\end{table}
+```
+
+## Output Format
+- Khi generate LaTeX: output code block với \begin{} environment đầy đủ
+- Không giải thích thêm trừ khi được yêu cầu
+- Verify: mọi \begin{} phải có \end{} matching
+- Verify tables: mọi column spec phải có `|`, mọi row phải kết thúc bằng `\hline`

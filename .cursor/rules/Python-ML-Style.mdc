@@ -1,0 +1,226 @@
+---
+alwaysApply: true
+---
+
+---
+description: Python coding conventions for ML research code — based on Google Python Style Guide + ML-specific extensions
+alwaysApply: true
+---
+
+# Python ML Style Rules
+
+## Tooling & Formatting
+- Run `pylint` trên toàn bộ code; suppress warnings có chủ đích với comment inline:
+  `# pylint: disable=invalid-name` (kèm lý do nếu không rõ từ tên)
+- Dùng **Black** auto-formatter — không tranh cãi về formatting
+- Maximum line length: **80 characters**; dùng parentheses để implicit line join, không dùng backslash `\`
+- Indent: **4 spaces**, tuyệt đối không dùng tab
+- 2 blank lines giữa top-level definitions (function/class); 1 blank line giữa methods
+
+## Imports
+- Thứ tự: standard library → third-party → project modules (cách nhau 1 blank line)
+- Quy tắc import:
+  - `import x` cho packages/modules
+  - `from x import y` khi `y` là module name
+  - `import numpy as np`, `import torch` — alias chuẩn được phép
+  - **Không** dùng relative imports: dùng full package path thay vì `from . import y`
+  - **Không** import trực tiếp class/function từ module trừ `typing` và `collections.abc`
+- Nhóm imports ML theo thứ tự: `torch`, `torch.nn`, `torch.nn.functional as F`, `numpy as np`, `einops`
+
+```python
+# ✅ Correct
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+from einops import rearrange, repeat
+from collections.abc import Sequence
+from typing import Optional
+
+from src.models.gpfq_quantizer import GPFQQuantizer
+
+# ❌ Wrong
+from .gpfq_quantizer import GPFQQuantizer  # relative import
+from torch.nn import Linear, ReLU          # importing individual classes
+```
+
+## Naming Conventions
+| Entity | Style | Example |
+|---|---|---|
+| Module/file | `lower_with_under` | `gpfq_quantizer.py` |
+| Class | `CapWords` | `MultimodalGCN` |
+| Function/method | `lower_with_under` | `compute_bpr_loss()` |
+| Variable | `lower_with_under` | `edge_index` |
+| Constant (module-level) | `ALL_CAPS` | `MAX_EPOCHS = 100` |
+| Exception class | `CapWords` + `Error` suffix | `ShapeMismatchError` |
+| Private | leading `_` | `_normalize_adj()` |
+
+- Tránh single-character names ngoại trừ: `i, j, k` (loop), `x, y` (math), `e` (except), `f` (file handle)
+- Tên phải mô tả rõ: `user_embeddings` thay vì `ue`; `item_visual_feat` thay vì `ivf`
+
+## Type Annotations (Required)
+- Annotate **tất cả** function parameters và return types — không exception
+- Dùng `torch.Tensor` cho tensor types (không phải `Any`)
+- Dùng `X | None` thay vì `Optional[X]` (Python 3.10+)
+- Dùng `collections.abc` cho abstract types: `Sequence`, `Mapping`, `Callable`
+- Khi default value `None`, phải khai báo `X | None = None` tường minh
+
+```python
+# ✅ Correct
+def forward(
+    self,
+    x: torch.Tensor,              # [batch, num_nodes, embed_dim]
+    adj: torch.Tensor,            # [num_nodes, num_nodes] sparse
+    modal_feats: dict[str, torch.Tensor] | None = None,
+) -> torch.Tensor:                # [batch, num_nodes, hidden_dim]
+    ...
+
+# ❌ Wrong
+def forward(self, x, adj, modal_feats=None):
+    ...
+```
+
+## Docstrings
+- Dùng `"""triple double quotes"""` — tất cả public classes và methods
+- Dòng đầu: một câu tóm tắt kết thúc bằng dấu `.`
+- Sections bắt buộc cho functions: `Args`, `Returns` (hoặc `Yields` cho generators), `Raises`
+- Classes: mô tả instance đại diện cho gì + document public attributes
+- Math notation dùng LaTeX inline trong docstring
+
+```python
+def compute_bpr_loss(
+    user_emb: torch.Tensor,
+    pos_emb: torch.Tensor,
+    neg_emb: torch.Tensor,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    r"""Compute Bayesian Personalized Ranking loss.
+
+    Implements: L_{BPR} = -\sum_{(u,i,j)} \log \sigma(\hat{y}_{ui} - \hat{y}_{uj})
+
+    Args:
+        user_emb: User embeddings of shape [batch, embed_dim].
+        pos_emb: Positive item embeddings of shape [batch, embed_dim].
+        neg_emb: Negative item embeddings of shape [batch, embed_dim].
+        temperature: Scaling temperature for logits. Defaults to 1.0.
+
+    Returns:
+        Scalar BPR loss averaged over the batch.
+
+    Raises:
+        ValueError: If user_emb, pos_emb, neg_emb have mismatched shapes.
+    """
+```
+
+## Tensor Operations
+- Luôn chỉ định `dim=` tường minh trong `torch.sum`, `torch.mean`, `torch.softmax`, `torch.argmax`
+- Dùng **einops** cho complex tensor manipulations thay vì chain `.reshape().permute()`
+- Add shape comment cho tensors không rõ ràng: `# [batch, num_nodes, embed_dim]`
+- Dùng `torch.where` thay vì boolean masking phức tạp
+
+```python
+# ✅ Correct
+attn = torch.softmax(logits, dim=-1)              # dim tường minh
+out = rearrange(x, 'b n (h d) -> b h n d', h=8)  # einops rõ ràng
+feat = torch.mean(node_feat, dim=1)               # [batch, embed_dim]
+
+# ❌ Wrong
+attn = torch.softmax(logits)                       # missing dim=
+out = x.reshape(B, N, 8, -1).permute(0, 2, 1, 3) # hard to read
+```
+
+## Error Handling
+- Dùng **`raise ValueError`** (không phải `assert`) để validate arguments trong production code
+- `assert` chỉ dùng trong pytest tests hoặc debug invariants không critical
+- Không dùng bare `except:` hoặc `except Exception:` trừ khi re-raise ngay
+- Custom exceptions phải inherit từ exception có sẵn và kết thúc bằng `Error`
+- Giữ `try` block **nhỏ nhất có thể** — chỉ bao quanh dòng có thể raise
+
+```python
+# ✅ Correct
+class ShapeMismatchError(ValueError):
+    """Raised when tensor shapes are incompatible for an operation."""
+
+def fuse_modalities(visual: torch.Tensor, text: torch.Tensor) -> torch.Tensor:
+    if visual.shape != text.shape:
+        raise ShapeMismatchError(
+            f"visual shape {visual.shape} != text shape {text.shape}"
+        )
+    ...
+
+# ❌ Wrong
+def fuse_modalities(visual, text):
+    assert visual.shape == text.shape  # breaks in production if assert disabled
+    ...
+```
+
+## Code Organization
+- **Tách biệt** model definition (`models/`) và training logic (`train/`)
+- Không hardcode hyperparameters — dùng `dataclass` config hoặc `dict`
+- Mỗi file tối đa **300 dòng** — split module nếu vượt ngưỡng
+- Module-level constants dùng ALL_CAPS, đặt sau imports
+- Tránh mutable global state; constants là fine
+
+```python
+# ✅ Correct — config dataclass
+from dataclasses import dataclass
+
+@dataclass
+class GCNConfig:
+    embed_dim: int = 64
+    num_layers: int = 3
+    dropout: float = 0.1
+    temperature: float = 0.2
+    quantize_bits: int = 2
+```
+
+## Comprehensions & Conditionals
+- Comprehensions được phép cho simple cases — **tối đa 1 `for` + 1 `if`**
+- Conditional expression `x if cond else y` chỉ khi mỗi phần fit trong 1 dòng
+- Dùng implicit falsy checks: `if seq:` thay vì `if len(seq) != 0:`
+- Với numpy/torch arrays: dùng `.size` hoặc `.numel()` thay vì implicit bool
+
+```python
+# ✅ Correct
+valid_items = [item for item in items if item.rating > 0]
+label = 'positive' if score > 0.5 else 'negative'
+if not embeddings:  # empty list check
+    ...
+
+# ❌ Wrong
+result = [(u, i) for u in users for i in items if u.id != i.creator_id]  # 2 fors
+if len(embeddings) == 0:  # verbose
+    ...
+```
+
+## Default Arguments
+- Không dùng **mutable objects** làm default argument value
+
+```python
+# ✅ Correct
+def build_graph(nodes: list[int], edges: list | None = None) -> Graph:
+    if edges is None:
+        edges = []
+
+# ❌ Wrong
+def build_graph(nodes, edges=[]):  # mutable default!
+    ...
+```
+
+## Reproducibility
+- Set random seeds tại đầu experiment entry point:
+  ```python
+  torch.manual_seed(42)
+  torch.cuda.manual_seed_all(42)
+  np.random.seed(42)
+  ```
+- Log **tất cả** hyperparameters với `wandb.config.update(vars(config))`
+- Dùng `torch.backends.cudnn.deterministic = True` cho reproducible GPU ops
+
+## Linting & Type Checking
+- Chạy `pylint` và `pytype` (hoặc `mypy`) trước khi commit
+- Suppress pylint warnings có chủ đích với comment inline kèm lý do:
+  ```python
+  def embed_users(self):  # pylint: disable=invalid-name — matches paper notation
+  ```
+- Dùng `from __future__ import annotations` để enable deferred type evaluation
