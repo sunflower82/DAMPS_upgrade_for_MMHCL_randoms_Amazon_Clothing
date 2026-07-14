@@ -176,6 +176,12 @@ def parse_args() -> argparse.Namespace:
         help="W&B job_type label (e.g. 'train', 'sweep_seed'). "
              "Empty string = W&B default.",
     )
+    parser.add_argument(
+        "--wandb_name", type=str, default="",
+        help="W&B run name (alias for --wandb_run_name; takes precedence "
+             "when both are set). Accepted by the RQ2 ablation runner and "
+             "any script that follows the W&B CLI convention.",
+    )
 
     # =====================================================================
     #  DAMPS-Specific (Revision 9)
