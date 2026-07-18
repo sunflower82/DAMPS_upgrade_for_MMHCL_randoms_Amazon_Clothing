@@ -122,3 +122,11 @@ watch_training.bat
 .ipynb_checkpoints/
 *.pdf
 *.tex
+# Security: do not commit notebooks, PDFs/LaTeX, or experimental results
+*.ipynb
+*.pdf
+*.tex
+Clothing/
+MMHCL_DAMPS_Project/results/
+rq2_audit_out/
+MMHCL_DAMPS_Project/optuna_*.db
