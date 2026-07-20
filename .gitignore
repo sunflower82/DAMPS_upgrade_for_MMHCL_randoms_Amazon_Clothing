@@ -128,6 +128,17 @@ watch_training.bat
 
 # --- Privacy: Jupyter Notebooks, PDF and LaTeX source documents ---
 *.ipynb
+*.ipynb.bak*
+*.bak_lattice39k
 .ipynb_checkpoints/
 *.pdf
 *.tex
+
+
+# --- Local scratch / paper extracts (do not publish) ---
+_mmhcl_extract.txt
+_mmhcl_method.txt
+_mmhcl_*.txt
+_scan_nb*.py
+_patch_nb*.py
+_nb_cell_dumps/
