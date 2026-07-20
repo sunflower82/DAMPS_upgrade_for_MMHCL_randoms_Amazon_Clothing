@@ -125,9 +125,18 @@ class NRDMCLiteView(nn.Module):
 
         Returns:
             w_final : (E,) tensor of per-edge weights, no clamp.
+
+        Note:
+            Forced to float32 so bf16/fp16 AMP cannot mix dtypes inside
+            ``scatter_add_`` / ``scatter_reduce_`` (PyTorch requires
+            self.dtype == src.dtype).
         """
-        eu = e_u[self._edge_u]                        # (E, d)
-        ei = e_i[self._edge_i]                        # (E, d)
+        # fp32 for AMP-safe scatter reductions + stable softmax.
+        eu = e_u[self._edge_u].float()                # (E, d)
+        ei = e_i[self._edge_i].float()                # (E, d)
+        g = self.g.float()
+        w_fuse = self.W_fuse.float()
+        b_fuse = self.b_fuse.float()
 
         # -- SAV (Eq. 14) --------------------------------------------------
         # NRDMC writes SAV[u,i] = σ(Ẽ_u ⊙ Ẽ_i). Since SAV must be a scalar
@@ -136,15 +145,17 @@ class NRDMCLiteView(nn.Module):
 
         # -- IAV (Eq. 16) --------------------------------------------------
         # β_{u,i} = σ( (g^T Ẽ_u) · (g^T Ẽ_i) )
-        gu = eu @ self.g                              # (E,)
-        gi = ei @ self.g                              # (E,)
+        gu = eu @ g                                   # (E,)
+        gi = ei @ g                                   # (E,)
         beta = torch.sigmoid(gu * gi)                 # (E,)
 
         # Softmax normalise β over user's interacted-item neighbourhood.
         # Numerically stable via max-shift + scatter-add.
         beta_max = torch.full(
-            (self.n_users,), float("-inf"),
-            device=beta.device, dtype=beta.dtype,
+            (self.n_users,),
+            float("-inf"),
+            device=beta.device,
+            dtype=torch.float32,
         )
         beta_max.scatter_reduce_(
             0, self._edge_u, beta, reduce="amax", include_self=True
@@ -155,7 +166,7 @@ class NRDMCLiteView(nn.Module):
         )
         exp_b = torch.exp(beta - beta_max[self._edge_u])   # (E,)
         exp_sum = torch.zeros(
-            self.n_users, device=beta.device, dtype=beta.dtype
+            self.n_users, device=beta.device, dtype=torch.float32
         )
         exp_sum.scatter_add_(0, self._edge_u, exp_b)
         iav = exp_b / (exp_sum[self._edge_u] + 1e-12)      # (E,)
@@ -163,9 +174,11 @@ class NRDMCLiteView(nn.Module):
         # -- Adaptive fusion (Eq. 17-19) -----------------------------------
         # Per-view scalar affine transform f_k = tanh(W * w_k + b).
         # Softmax attention over views -> shared component -> add specifics.
-        f_sav = torch.tanh(self.W_fuse * sav + self.b_fuse)
-        f_iav = torch.tanh(self.W_fuse * iav + self.b_fuse)
-        att = torch.softmax(torch.stack([f_sav, f_iav], dim=0), dim=0)  # (2,E)
+        f_sav = torch.tanh(w_fuse * sav + b_fuse)
+        f_iav = torch.tanh(w_fuse * iav + b_fuse)
+        att = torch.softmax(
+            torch.stack([f_sav, f_iav], dim=0), dim=0
+        )  # (2, E)
         w_shared = att[0] * sav + att[1] * iav                          # (E,)
         # Eq. 19: w_final = w_shared + Σ_k (w_k - w_shared)
         #                 = sav + iav - w_shared            (K = 2)
@@ -188,6 +201,10 @@ class NRDMCLiteView(nn.Module):
         """
         device = e_u_ego.device
         n_total = self.n_users + self.n_items
+        # Keep sparse.mm + scatter_add in fp32 under AMP (bf16/fp16).
+        w_final = w_final.float()
+        e_u_ego = e_u_ego.float()
+        e_i_ego = e_i_ego.float()
 
         # Symmetric bipartite edges: [u -> i+n_users] and [i+n_users -> u]
         row = torch.cat([self._edge_u, self._edge_i + self.n_users], dim=0)
@@ -195,7 +212,7 @@ class NRDMCLiteView(nn.Module):
         val = torch.cat([w_final, w_final], dim=0)
 
         # Degree from the LEARNED weights.
-        deg = torch.zeros(n_total, device=device, dtype=val.dtype)
+        deg = torch.zeros(n_total, device=device, dtype=torch.float32)
         deg.scatter_add_(0, row, val)
         # Clamp deg > 0 to avoid division blow-ups on isolated nodes.
         deg = deg.clamp_min(1e-12)
@@ -313,12 +330,23 @@ def compute_nrdmc_view_loss(
     computed as batch-N InfoNCE between ê (post-GCN trunk output) and
     ē (contrastive-view LightGCN output).
     """
-    e_bar_u, e_bar_i = view_module(e_u_hat, e_i_hat, e_u_ego, e_i_ego, ui_mat)
-    e_hat_u_n = F.normalize(e_u_hat, dim=-1)
-    e_hat_i_n = F.normalize(e_i_hat, dim=-1)
-    L_user = _batchN_infonce(e_hat_u_n, e_bar_u, tau, batch_size)
-    L_item = _batchN_infonce(e_hat_i_n, e_bar_i, tau, batch_size)
-    return 0.5 * (L_user + L_item)
+    # Disable autocast: scatter_add_/sparse.mm require matching dtypes, and
+    # bf16 AMP otherwise mixes Parameter (fp32) with activation (bf16).
+    device_type = e_u_hat.device.type
+    with torch.amp.autocast(device_type=device_type, enabled=False):
+        e_bar_u, e_bar_i = view_module(
+            e_u_hat.float(),
+            e_i_hat.float(),
+            e_u_ego.float(),
+            e_i_ego.float(),
+            ui_mat,
+        )
+        e_hat_u_n = F.normalize(e_u_hat.float(), dim=-1)
+        e_hat_i_n = F.normalize(e_i_hat.float(), dim=-1)
+        tau_f = tau.float() if torch.is_tensor(tau) else tau
+        L_user = _batchN_infonce(e_hat_u_n, e_bar_u, tau_f, batch_size)
+        L_item = _batchN_infonce(e_hat_i_n, e_bar_i, tau_f, batch_size)
+        return 0.5 * (L_user + L_item)
 
 
 __all__ = ["NRDMCLiteView", "compute_nrdmc_view_loss"]
