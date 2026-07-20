@@ -145,6 +145,28 @@ def parse_args() -> argparse.Namespace:
                         help="{max, min}.")
     parser.add_argument("--early_stopping_restore_best", type=int, default=1,
                         help="1 = restore best weights on stop.")
+    parser.add_argument(
+        "--early_stopping_monitor",
+        type=str,
+        default="val_recall@20",
+        help="Validation metric that drives the early-stopping patience "
+             "counter. Accepted forms: 'val_recall@K', 'val_ndcg@K', "
+             "'val_precision@K' (K must appear in --Ks), or the aliases "
+             "'recall' / 'ndcg' / 'precision' (uses the last K in --Ks). "
+             "Peak-snapshot bookkeeping for recall AND ndcg is unchanged; "
+             "only the patience reset rule is gated by this flag. "
+             "Default 'val_recall@20' matches the PACER / smoke protocol.",
+    )
+    parser.add_argument(
+        "--adaptive_patience",
+        type=int,
+        default=0,
+        help="0 = fixed --early_stopping_patience (default; smoke / "
+             "PACER tercile protocol). "
+             "1 = grow effective patience by +1 every 50 epochs after "
+             "--early_stopping_min_epochs (mild schedule; keeps long "
+             "runs from stopping too aggressively on noisy plateaus).",
+    )
 
     # =====================================================================
     #  ReduceLROnPlateau

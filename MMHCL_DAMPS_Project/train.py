@@ -40,6 +40,7 @@ import math
 import os
 import pathlib
 import random
+import re
 import sys
 from time import time
 from typing import Any, Optional, Union
@@ -108,41 +109,64 @@ def _inductor_complex_backward_supported() -> bool:
     that triggers this bug it will fire on every training step.
 
     We therefore probe end-to-end (forward + backward through a tiny
-    ``rFFT -> *2.0 -> iRFFT`` pipeline) at startup. If the probe fails we
-    skip the ``torch.compile`` wrap on the DAMPS submodule entirely and
-    run it in eager mode. If the probe succeeds (e.g. a future PyTorch
-    where the bug is fixed, or a non-Windows build) the wrap is applied
-    as usual and the speedup is preserved.
+    ``rFFT -> rot -> iRFFT`` pipeline) **lazily** the first time
+    ``--use_torch_compile 1`` is requested. If the probe fails we skip
+    the ``torch.compile`` wrap on the DAMPS submodule entirely and run
+    it in eager mode. If the probe succeeds the wrap is applied as usual.
 
-    The probe runs on CPU, takes ~1-3 s, and is invoked once per
-    ``train.py`` subprocess.
+    The probe runs on CPU and takes ~1-3 s. It is **not** invoked when
+    ``--use_torch_compile 0`` (the PACER / smoke default), so smoke logs
+    are no longer flooded with Inductor backward-compile tracebacks.
     """
     if not hasattr(torch, "compile"):
         return False
+    # Silence Inductor's verbose "failed to eagerly compile backwards"
+    # dump during the probe — a caught failure is the expected outcome
+    # on affected Windows/CUDA builds and must not look like a training
+    # crash in smoke stdout.
+    import contextlib
+    import io
+    import logging as _logging
+
+    _log = _logging.getLogger("torch._inductor")
+    _prev_level = _log.level
     try:
-        # The bug fires specifically when a Python ``complex`` literal (e.g.
-        # ``1j``) leaks into Inductor's ``add_alias`` via something like
-        # ``torch.exp(1j * theta)`` -- which is exactly what DAMPS's APC
-        # phase rotation does in ``damps/core.py::_apply_apc``::
-        #     rot = torch.exp(-1j * (theta/2 + psi))   # complex tensor
-        #     z   = z * rot                             # complex * complex
-        # The probe replicates this idiom so it accurately predicts whether
-        # the real DAMPS forward+backward will compile on this build.
+        _log.setLevel(_logging.CRITICAL)
+
         def _probe(v: torch.Tensor) -> torch.Tensor:
+            # Replicates damps/core.py::_apply_apc's ``exp(1j * phi)``
+            # idiom so the probe predicts the real DAMPS compile path.
             z = torch.fft.rfft(v, dim=-1, norm="ortho")
             phi = v[..., : z.shape[-1]]
             rot = torch.exp(1j * phi)
             return torch.fft.irfft(z * rot, n=8, dim=-1, norm="ortho")
 
-        compiled = torch.compile(_probe, mode="reduce-overhead", dynamic=True)
-        x = torch.randn(4, 8, requires_grad=True)
-        compiled(x).sum().backward()
+        with contextlib.redirect_stderr(io.StringIO()):
+            compiled = torch.compile(
+                _probe, mode="reduce-overhead", dynamic=True
+            )
+            x = torch.randn(4, 8, requires_grad=True)
+            compiled(x).sum().backward()
         return True
     except Exception:
         return False
+    finally:
+        _log.setLevel(_prev_level)
 
 
-_INDUCTOR_COMPLEX_BACKWARD_OK: bool = _inductor_complex_backward_supported()
+# Lazy cache: None = not probed yet. Avoids paying the ~1-3 s Inductor
+# probe (and its stderr noise) on every import when compile is off.
+_INDUCTOR_COMPLEX_BACKWARD_OK: bool | None = None
+
+
+def _get_inductor_complex_backward_ok() -> bool:
+    """Return (and cache) the Inductor complex-backward probe result."""
+    global _INDUCTOR_COMPLEX_BACKWARD_OK
+    if _INDUCTOR_COMPLEX_BACKWARD_OK is None:
+        _INDUCTOR_COMPLEX_BACKWARD_OK = (
+            _inductor_complex_backward_supported()
+        )
+    return bool(_INDUCTOR_COMPLEX_BACKWARD_OK)
 
 
 from utility.parser import parse_args
@@ -160,6 +184,57 @@ from model import DAMPS_MMHCL
 
 
 args = parse_args()
+
+
+def _resolve_early_stopping_monitor(
+    monitor: str,
+    ks: list[int],
+) -> tuple[str, int]:
+    """Parse ``--early_stopping_monitor`` into ``(metric_name, ks_index)``.
+
+    Args:
+        monitor: CLI string, e.g. ``val_recall@20`` or ``ndcg``.
+        ks: Evaluation cut-offs from ``--Ks`` (e.g. ``[10, 20]``).
+
+    Returns:
+        ``(metric, idx)`` where ``metric`` is one of
+        ``{"recall", "ndcg", "precision"}`` and ``idx`` indexes into
+        the per-metric arrays returned by ``Trainer.test``.
+
+    Raises:
+        ValueError: If the requested ``@K`` is not present in ``ks``.
+    """
+    mon = str(monitor or "val_recall@20").strip().lower()
+    k_match = re.search(r"@(\d+)\s*$", mon)
+    if k_match is not None:
+        k_req = int(k_match.group(1))
+        if k_req not in ks:
+            raise ValueError(
+                f"--early_stopping_monitor={monitor!r} requests @{k_req}, "
+                f"but --Ks={ks} does not contain that cut-off."
+            )
+        idx = ks.index(k_req)
+    else:
+        idx = len(ks) - 1
+
+    if "ndcg" in mon:
+        metric = "ndcg"
+    elif "precision" in mon:
+        metric = "precision"
+    else:
+        metric = "recall"
+    return metric, idx
+
+
+def _effective_patience(epoch: int) -> int:
+    """Return the patience used at ``epoch`` (fixed or adaptive)."""
+    base = max(1, int(args.early_stopping_patience))
+    if not bool(getattr(args, "adaptive_patience", 0)):
+        return base
+    # Mild growth: +1 patience every 50 epochs after min_epochs.
+    min_ep = max(0, int(args.early_stopping_min_epochs))
+    extra = max(0, (epoch - min_ep) // 50)
+    return base + extra
 
 
 # ===========================================================================
@@ -386,7 +461,7 @@ class Trainer:
         # detects that condition at startup and we skip the wrap to keep
         # DAMPS in eager mode (correct, just no compile speedup).
         if bool(args.use_torch_compile) and hasattr(torch, "compile"):
-            if not _INDUCTOR_COMPLEX_BACKWARD_OK:
+            if not _get_inductor_complex_backward_ok():
                 self.logger.logging(
                     "[speedup] torch.compile requested but this PyTorch "
                     "build's Inductor BACKWARD compiler cannot lower DAMPS's "
@@ -748,6 +823,9 @@ class Trainer:
                 f"ndcg@{Ks[-1]}={val['ndcg'][-1]:.5f}"
             )
 
+            # Keep the pre-update precision best so --early_stopping_monitor
+            # val_precision@K can detect a true improvement this cycle.
+            prev_best_val_precision = best_val_precision
             best_val_precision = max(
                 best_val_precision, float(val["precision"][-1])
             )
@@ -774,16 +852,32 @@ class Trainer:
                 self.reduce_lr_scheduler.step(val["recall"][-1])
 
             # ---------------- Early stopping ----------------
-            # Improvement criterion: either val_recall@K OR val_ndcg@K must
-            # strictly exceed its running best by at least ``min_delta``. The
-            # patience counter resets on either kind of improvement (matches
-            # the original MMHCL/BM3 behaviour).
+            # Peak bookkeeping still tracks recall AND ndcg independently
+            # (PACER BEST_Test_* semantics). The *patience* counter, however,
+            # is gated solely by ``--early_stopping_monitor`` (smoke / PACER
+            # tercile protocol passes ``val_recall@20``).
             recall_improved = (
                 val["recall"][1] > best_val_recall + args.early_stopping_min_delta
             )
             ndcg_improved = (
                 val["ndcg"][1] > best_val_ndcg + args.early_stopping_min_delta
             )
+            mon_metric, mon_idx = _resolve_early_stopping_monitor(
+                str(getattr(args, "early_stopping_monitor", "val_recall@20")),
+                list(Ks),
+            )
+            mon_best = {
+                "recall": best_val_recall,
+                "ndcg": best_val_ndcg,
+                "precision": prev_best_val_precision,
+            }[mon_metric]
+            monitor_improved = (
+                float(val[mon_metric][mon_idx])
+                > mon_best + args.early_stopping_min_delta
+            )
+            # Still run a test evaluation whenever recall OR ndcg improves
+            # so peak snapshots stay correct; patience only listens to
+            # ``monitor_improved``.
             improved = recall_improved or ndcg_improved
             if improved:
                 test_ret = self.test(users_to_test, is_val=False)
@@ -838,13 +932,22 @@ class Trainer:
                         "best_recall": best_val_recall,
                         "best_ndcg": best_val_ndcg,
                     })
+
+            # Patience is driven ONLY by --early_stopping_monitor.
+            if monitor_improved:
                 stopping_step = 0
                 if args.early_stopping_restore_best:
                     best_model_state = copy.deepcopy(self.model.state_dict())
             elif epoch + 1 >= args.early_stopping_min_epochs:
                 stopping_step += 1
-                self.logger.logging(f"##### Early stopping step: {stopping_step} #####")
-                if stopping_step >= args.early_stopping_patience:
+                eff_patience = _effective_patience(epoch)
+                self.logger.logging(
+                    f"##### Early stopping step: {stopping_step}/"
+                    f"{eff_patience} (monitor="
+                    f"{getattr(args, 'early_stopping_monitor', 'val_recall@20')}"
+                    f") #####"
+                )
+                if stopping_step >= eff_patience:
                     self.logger.logging("##### Early stop triggered #####")
                     if args.early_stopping_restore_best and best_model_state is not None:
                         self.model.load_state_dict(best_model_state)
