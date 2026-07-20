@@ -382,6 +382,9 @@ class Trainer:
             branchA_bcl_batchn=bool(args.branchA_bcl_batchn),
             branchA_view_bsz=int(args.branchA_view_bsz),
             branchA_bcl_bsz=int(args.branchA_bcl_bsz),
+            # ---- Branch A' / NRDMC-lite (rev55 §8.2) ----
+            enable_nrdmc_lite=bool(getattr(args, "enable_nrdmc_lite", 0)),
+            nrdmc_lite_layers=int(getattr(args, "nrdmc_lite_layers", 2)),
         ).to(self.device)
         self.model.set_meta_categories(
             data_generator.meta_categories.to(self.device)
@@ -716,7 +719,12 @@ class Trainer:
                     # simgcl_view_forward() is a hard no-op when
                     # args.enable_simgcl=0, preserving the Wave 1
                     # LogQ-only baseline bit-for-bit.
-                    if args.enable_simgcl:
+                    # rev55 §8.2 -- NRDMC-lite (Branch A') uses the same
+                    # hook but internally routes to learnable view generators.
+                    _view_on = bool(args.enable_simgcl) or bool(
+                        getattr(args, "enable_nrdmc_lite", 0)
+                    )
+                    if _view_on:
                         l_view = (
                             self.model.simgcl_view_forward(epoch=epoch)
                             * args.lambda_view

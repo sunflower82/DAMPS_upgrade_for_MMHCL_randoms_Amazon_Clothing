@@ -197,6 +197,9 @@ class DAMPS_MMHCL(nn.Module):
         branchA_bcl_batchn: bool = True,
         branchA_view_bsz: int = 2048,
         branchA_bcl_bsz: int = 2048,
+        # ---- Branch A' / NRDMC-lite (rev55 §8.2) -- learnable view generators ----
+        enable_nrdmc_lite: bool = False,
+        nrdmc_lite_layers: int = 2,
     ) -> None:
         super().__init__()
 
@@ -445,6 +448,23 @@ class DAMPS_MMHCL(nn.Module):
         self._simgcl_view_cache: Optional[tuple] = None
         self._simgcl_view_epoch: int = -1
         self._ui_mat: Optional[torch.Tensor] = None
+
+        # ---- Branch A' / NRDMC-lite (rev55 §8.2) ----
+        # Learnable SAV + IAV view generators + adaptive fusion + view GCN.
+        # See ``damps/nrdmc_lite.py`` for the math + design notes.
+        self.enable_nrdmc_lite: bool = bool(enable_nrdmc_lite)
+        self.nrdmc_lite_layers: int = int(nrdmc_lite_layers)
+        if self.enable_nrdmc_lite:
+            # Lazy import so the SimGCL-only path has zero import cost.
+            from damps.nrdmc_lite import NRDMCLiteView  # pylint: disable=C0415
+            self.nrdmc_lite_view = NRDMCLiteView(
+                n_users=self.n_users,
+                n_items=self.n_items,
+                embed_dim=self.embedding_dim,
+                n_layers=self.nrdmc_lite_layers,
+            )
+        else:
+            self.nrdmc_lite_view = None  # type: ignore[assignment]
 
     # ------------------------------------------------------------------
     #  Setters & accessors
@@ -744,6 +764,36 @@ class DAMPS_MMHCL(nn.Module):
         Returns:
             Scalar loss tensor with gradient flow into ego embeddings.
         """
+        # ------------------------------------------------------------------
+        # Branch A' (rev55 §8.2) -- NRDMC-lite short-circuit.
+        # When enabled, this method returns L_mv computed against learnable
+        # SAV + IAV view generators instead of the SimGCL noise views. The
+        # SimGCL branch below is UNCHANGED and remains bit-for-bit identical
+        # when enable_nrdmc_lite=False.
+        # ------------------------------------------------------------------
+        if self.enable_nrdmc_lite:
+            from damps.nrdmc_lite import (  # pylint: disable=import-outside-toplevel
+                compute_nrdmc_view_loss,
+            )
+            ego_u = self.user_ui_embedding.weight
+            ego_i = self.item_ui_embedding.weight
+            # One extra LightGCN pass to get post-GCN E_hat (ê) for SAV/IAV.
+            u_hat, i_hat = self._lightgcn_propagate(ego_u, ego_i)
+            if self._ui_mat is None:
+                raise RuntimeError(
+                    "nrdmc_lite view called before forward() cached _ui_mat."
+                )
+            return compute_nrdmc_view_loss(
+                view_module=self.nrdmc_lite_view,
+                e_u_hat=u_hat,
+                e_i_hat=i_hat,
+                e_u_ego=ego_u,
+                e_i_ego=ego_i,
+                ui_mat=self._ui_mat,
+                tau=self.tau,
+                batch_size=self.branchA_view_bsz,
+            )
+
         if not self.enable_simgcl:
             return torch.zeros(
                 (), device=self.user_ui_embedding.weight.device

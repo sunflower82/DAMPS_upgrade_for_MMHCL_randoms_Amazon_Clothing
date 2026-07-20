@@ -328,6 +328,25 @@ def parse_args() -> argparse.Namespace:
     )
 
     # =====================================================================
+    #  Branch A' -- NRDMC-lite learnable view generators (rev55 §8.2)
+    #  Replaces the SimGCL noise-based views with SAV + IAV + adaptive
+    #  fusion (NRDMC IPM 2026 Eq. 14, 16, 17-19). PTV is dropped per §8.2.
+    # =====================================================================
+    parser.add_argument(
+        "--enable_nrdmc_lite", type=int, default=0,
+        help="1 = replace the SimGCL view path with the NRDMC-lite "
+             "learnable SAV+IAV+adaptive-fusion view generators from "
+             "rev55 §8.2 (Branch A'). Mutually exclusive with "
+             "--enable_simgcl (train.py refuses both being on).",
+    )
+    parser.add_argument(
+        "--nrdmc_lite_layers", type=int, default=2,
+        help="Number of LightGCN steps to propagate over the learned "
+             "contrastive graph inside the NRDMC-lite view module. "
+             "Default 2 keeps the extra compute below 1%% of an epoch.",
+    )
+
+    # =====================================================================
     #  Pattern B' (Scheduled Rebuild)
     # =====================================================================
     parser.add_argument("--rebuild_R", type=int, default=5,
