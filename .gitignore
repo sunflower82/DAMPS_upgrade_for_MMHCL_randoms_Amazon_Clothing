@@ -57,6 +57,15 @@ wandb/
 
 # --- Dataset payloads (large, should be downloaded separately) ---
 data/
+# Keep Clothing interaction splits (features *.npy stay ignored — download from Hugging Face)
+!data/Clothing/
+!data/Clothing/5-core/
+!data/Clothing/0-core/
+!data/Clothing/5-core/*.json
+!data/Clothing/0-core/*.json
+data/Clothing_hf_download/
+data/Clothing_old_incorrect_backup/
+data/_hf_mmhcl_clothing_tmp/
 
 
 # --- Per-run training outputs (re-generated each training run) ---
@@ -122,11 +131,3 @@ watch_training.bat
 .ipynb_checkpoints/
 *.pdf
 *.tex
-# Security: do not commit notebooks, PDFs/LaTeX, or experimental results
-*.ipynb
-*.pdf
-*.tex
-Clothing/
-MMHCL_DAMPS_Project/results/
-rq2_audit_out/
-MMHCL_DAMPS_Project/optuna_*.db
