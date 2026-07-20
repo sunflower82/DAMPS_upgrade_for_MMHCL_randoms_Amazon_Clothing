@@ -179,7 +179,17 @@ def parse_args() -> argparse.Namespace:
     # =====================================================================
     #  W&B Tracking
     # =====================================================================
-    parser.add_argument("--use_wandb", type=int, default=0)
+    # ``--wandb`` is an exact alias for ``--use_wandb``. Without it, bare
+    # ``--wandb`` is an ambiguous prefix of ``--wandb_project`` / ``_entity``
+    # / … and argparse exits 2 (silent NaN aggregates in notebook drivers).
+    parser.add_argument(
+        "--use_wandb",
+        "--wandb",
+        type=int,
+        default=0,
+        dest="use_wandb",
+        help="1 = enable Weights & Biases logging (alias: --wandb).",
+    )
     parser.add_argument("--wandb_project", type=str, default="damps-mmhcl")
     parser.add_argument("--wandb_entity", type=str, default="")
     parser.add_argument("--wandb_run_name", type=str, default="")

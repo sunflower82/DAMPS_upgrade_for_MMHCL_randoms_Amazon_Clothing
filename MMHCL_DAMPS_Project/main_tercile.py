@@ -19,8 +19,8 @@ things on top of the stock PACER training loop:
      and at the end of training we write the "best" snapshots into
      ``wandb.summary`` so the run's Overview panel shows them.
   4. Two parser-friendly summary lines are printed at end of run:
-         [tercile-final]     BEST_Recall@20_Head=..  Mid=..  Tail=..
-         [tercile-test-final] BEST_Test_Recall@20_Head=..  Mid=..  Tail=..
+         [tercile-final]     BEST_Recall@20_Head=.. BEST_Recall@20_Mid=.. BEST_Recall@20_Tail=..
+         [tercile-test-final] BEST_Test_Recall@20_Head=.. BEST_Test_Recall@20_Mid=.. BEST_Test_Recall@20_Tail=..
 
 The wrapper does NOT touch the training math -- it only reads the final
 user/item embeddings (via a single extra forward pass under ``model.eval``
