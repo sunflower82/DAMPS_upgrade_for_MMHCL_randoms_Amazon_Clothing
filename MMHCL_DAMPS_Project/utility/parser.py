@@ -109,11 +109,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--item_loss_ratio", type=float, default=0.07,
                         help="Weight for item-side contrastive loss.")
     parser.add_argument("--temperature", type=float, default=0.3,
-                        help="InfoNCE temperature tau. Default is 0.3 to "
-                             "match the Revision 11 / rev44 Phase 1 anchor "
-                             "(static tau sweep set {0.2, 0.3, 0.5}). To "
-                             "reproduce the Revision 9 / rev42 baseline, "
-                             "pass --learnable_tau 1 --temperature 0.1.")
+                        help="InfoNCE temperature tau (shared by trunk BCL "
+                             "and NRDMC-lite / SimGCL view InfoNCE). "
+                             "Default 0.3 matches rev44 Phase 1. "
+                             "Branch A' upgrade P2 probes {0.30, 0.40} "
+                             "(softer view gradients vs clothing τ=0.251). "
+                             "Learnable tau: --learnable_tau 1 "
+                             "--temperature 0.1.")
     parser.add_argument("--learnable_tau", type=int, default=0,
                         help="0 = static tau (rev44 Phase 1 default; tau "
                              "is a non-trainable buffer fixed at "
@@ -288,9 +290,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--lambda_view", type=float, default=0.05,
-        help="Weight of L_SimGCL in the total loss. The M1 ablation "
-             "sweep covers {0.01, 0.05, 0.1}; the rollback gate requires "
-             "Recall@20 >= 0.0890 on every seed for ALL three values.",
+        help="Weight of the view-invariance loss (SimGCL or NRDMC-lite). "
+             "Branch A' upgrade P1 lowers the aggressive λ=0.2 baseline "
+             "to {0.05, 0.10} so BPR is not drowned by view InfoNCE. "
+             "M1 ablation historically covered {0.01, 0.05, 0.1}.",
     )
     parser.add_argument(
         "--simgcl_batch_size_user", type=int, default=4096,
