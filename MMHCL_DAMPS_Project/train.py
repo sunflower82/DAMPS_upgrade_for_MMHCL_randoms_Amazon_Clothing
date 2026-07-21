@@ -185,6 +185,13 @@ from model import DAMPS_MMHCL
 
 args = parse_args()
 
+# Branch A' / SimGCL are mutually exclusive view paths (parser help contract).
+if bool(args.enable_simgcl) and bool(getattr(args, "enable_nrdmc_lite", 0)):
+    raise ValueError(
+        "--enable_simgcl and --enable_nrdmc_lite are mutually exclusive; "
+        "enable exactly one view path (or neither for LogQ-only)."
+    )
+
 
 def _resolve_early_stopping_monitor(
     monitor: str,

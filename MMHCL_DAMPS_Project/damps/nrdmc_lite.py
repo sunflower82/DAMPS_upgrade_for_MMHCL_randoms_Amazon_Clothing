@@ -289,28 +289,40 @@ def _batchN_infonce(
     L = 0.5 * ( CE(sim(e_hat, e_bar) / τ, diag) + CE(sim(e_bar, e_hat) / τ, diag) )
     computed in row-chunks of size ``batch_size`` for memory.
 
+    Per-node losses are pooled with ``torch.cat(...).mean()`` so every row
+    contributes equally — including the final partial chunk. Averaging one
+    scalar ``cross_entropy`` per chunk would under-weight that remainder.
+
     NB: identical semantics to
     ``branchA_simgcl_batchN.simgcl_view_invariance_loss`` but hand-inlined
     here to keep the module self-contained and importable at model-init time
     without a dependency on the model.py view path.
     """
-    device = e_hat.device
-    N = e_hat.size(0)
+    if e_hat.shape != e_bar.shape:
+        raise ValueError(
+            f"shape mismatch: e_hat={tuple(e_hat.shape)} "
+            f"e_bar={tuple(e_bar.shape)}"
+        )
+    if e_hat.dim() != 2:
+        raise ValueError(f"expected 2-D tensors, got e_hat.dim()={e_hat.dim()}")
+
+    n = e_hat.size(0)
     tau_c = torch.clamp(tau, min=0.01)
-    total = torch.zeros((), device=device, dtype=e_hat.dtype)
-    n_chunks = 0
-    for start in range(0, N, batch_size):
-        end = min(start + batch_size, N)
+    losses: list[torch.Tensor] = []
+    for start in range(0, n, batch_size):
+        end = min(start + batch_size, n)
         z1 = e_hat[start:end]                          # (B, d)
         z2 = e_bar[start:end]                          # (B, d)
         sim_12 = z1 @ z2.T / tau_c                     # (B, B)
         sim_21 = z2 @ z1.T / tau_c                     # (B, B)
-        labels = torch.arange(end - start, device=device)
-        l12 = F.cross_entropy(sim_12, labels)
-        l21 = F.cross_entropy(sim_21, labels)
-        total = total + 0.5 * (l12 + l21)
-        n_chunks += 1
-    return total / max(n_chunks, 1)
+        log_p_12 = F.log_softmax(sim_12, dim=-1)
+        log_p_21 = F.log_softmax(sim_21, dim=-1)
+        diag_idx = torch.arange(end - start, device=e_hat.device)
+        losses.append(
+            -0.5
+            * (log_p_12[diag_idx, diag_idx] + log_p_21[diag_idx, diag_idx])
+        )
+    return torch.cat(losses).mean()
 
 
 def compute_nrdmc_view_loss(

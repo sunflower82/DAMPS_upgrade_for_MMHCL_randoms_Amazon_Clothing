@@ -67,7 +67,8 @@ _TER_TEST_RX = re.compile(
     r"\s+BEST_Test_Recall@20_Mid=(?P<m>[-\d.eE+nan]+)"
     r"\s+BEST_Test_Recall@20_Tail=(?P<t>[-\d.eE+nan]+)"
 )
-_BEST_RX = re.compile(r"BEST_Test_Recall@20\s*=\s*([-\d.eE+nan]+)")
+# train.py logs ``BEST_Test_Recall@20: <val>`` (colon); accept ``=`` too.
+_BEST_RX = re.compile(r"BEST_Test_Recall@20\s*[:=]\s*([-\d.eE+nan]+)")
 _BEST_NDCG_RX = re.compile(r"BEST_Test_NDCG@20\s*[:=]\s*([-\d.eE+nan]+)")
 _VAL_R20_RX = re.compile(r"BEST_Val_Recall@20\s*[:=]\s*([-\d.eE+nan]+)")
 
