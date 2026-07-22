@@ -360,6 +360,30 @@ def parse_args() -> argparse.Namespace:
     )
 
     # =====================================================================
+    #  Branch A' -- P3 (rev56) Prototype-Aware View (PTV)
+    #  Re-instates the third NRDMC view (Eq. 15, 20-22) that was dropped
+    #  in rev55 §8.2. See PACER_NRDMC_lite_upgrade_analysis_EN §6 (rev56).
+    # =====================================================================
+    parser.add_argument(
+        "--enable_ptv", type=int, default=0,
+        help="1 = enable the Prototype-Aware View (PTV) in NRDMC-lite. "
+             "Requires --enable_nrdmc_lite=1. Extends the K=2 fusion "
+             "(SAV+IAV) to K=3 (SAV+IAV+PTV) via NRDMC IPM 2026 Eq. 20-22.",
+    )
+    parser.add_argument(
+        "--n_prototypes", type=int, default=32,
+        help="Number of learnable prototypes K in PTV. Only used when "
+             "--enable_ptv=1. NRDMC paper defaults K in {16, 32, 64}; "
+             "K=32 is the P3 default (Table 4 ablation optimum).",
+    )
+    parser.add_argument(
+        "--lambda_ptv", type=float, default=1.0,
+        help="PTV mixing coefficient inside adaptive fusion (Eq. 19 K=3). "
+             "lambda_ptv=0 recovers the exact K=2 baseline; lambda_ptv=1 "
+             "is the paper default (equal PTV weight with SAV/IAV).",
+    )
+
+    # =====================================================================
     #  Pattern B' (Scheduled Rebuild)
     # =====================================================================
     parser.add_argument("--rebuild_R", type=int, default=5,

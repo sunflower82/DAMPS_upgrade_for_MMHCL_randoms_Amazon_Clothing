@@ -392,6 +392,10 @@ class Trainer:
             # ---- Branch A' / NRDMC-lite (rev55 §8.2) ----
             enable_nrdmc_lite=bool(getattr(args, "enable_nrdmc_lite", 0)),
             nrdmc_lite_layers=int(getattr(args, "nrdmc_lite_layers", 2)),
+            # ---- Branch A' / P3 (rev56) Prototype-Aware View ----
+            enable_ptv=bool(getattr(args, "enable_ptv", 0)),
+            n_prototypes=int(getattr(args, "n_prototypes", 32)),
+            lambda_ptv=float(getattr(args, "lambda_ptv", 1.0)),
         ).to(self.device)
         self.model.set_meta_categories(
             data_generator.meta_categories.to(self.device)

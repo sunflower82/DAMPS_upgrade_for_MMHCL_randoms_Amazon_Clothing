@@ -2,35 +2,47 @@
 damps/nrdmc_lite.py -- Branch A' (NRDMC-lite) view generators + contrastive loss.
 ==================================================================================
 
-Implements the design-doc §8.2 spec (DAMPS_to_MMHCL_architecture_revision55):
-  * Light-redesign upgrade of the SimGCL view path.
-  * Adds two LEARNABLE view generators over the observed U-I bipartite edges:
-      - SAV (Structure-Aware View, NRDMC IPM 2026 Eq. 14)
-      - IAV (Importance-Aware View,          Eq. 16)
-    (PTV / Prototype-Aware View is DROPPED per §8.2 to keep the fix compact.)
-  * Adaptive fusion of the two views (Eq. 17-19).
-  * One-shot LightGCN pass over the resulting weighted contrastive graph
-    to obtain view embeddings E_bar_u, E_bar_i.
-  * Batch-N InfoNCE (Yu et al. SIGIR 2022, App. A.3) between:
-        original ego-post-GCN embeddings  ê  (a.k.a. E_hat)
-        contrastive-view embeddings       ē  (a.k.a. E_bar)
-    on both user and item sides, giving L_mv = 0.5 * (L_mv_user + L_mv_item).
+**Rev55 §8.2 + P3 (rev56)**  --  Adds the Prototype-Aware View (PTV) that was
+dropped in the original §8.2 to keep the fix compact.  The upgrade path is
+motivated by the P1+P2 grid results (results/p1_p2_lambda_tau_grid_clothing.json):
 
-Runtime cost (Amazon Clothing, |E|=197 338, d=128, L=3, B=2048):
-  * SAV+IAV+fusion : ~ 100 M ops        (< 1 % of an epoch)
-  * View GCN       : ~ 75 M ops         (< 1 % of an epoch)
-  * Batch-N InfoNCE: identical to the current SimGCL branch A path.
+  * P1 (lower ``lambda_view``) failed to lift the Head Recall@20 ceiling.
+  * P2 (higher ``tau``) only delayed convergence -- the ceiling stayed put.
+  * Diagnosis (revised, §6 of upgrade_analysis_EN.tex): the plateau at
+    R@20 ~ 0.083 is a *representational-capacity* ceiling of the SAV+IAV
+    fusion, NOT a lambda/tau regularisation issue.
 
-Design choices vs the paper:
-  * We DROP PTV (K prototypes + soft assignment) -- design-doc §8.2 explicit.
-  * We reuse the current `_lightgcn_propagate` normalisation semantics
-    (symmetric D^{-1/2} A D^{-1/2}) on the LEARNED edge weights.
-  * We DO NOT clamp the learned weights, but we normalise them via
-    the graph Laplacian, which is empirically stable in the 197 k-edge regime.
-  * The view is refreshed EVERY BATCH (unlike SimGCL's every-k-epochs cache);
-    the cost is dominated by the InfoNCE matmul, so the extra 200 M ops per
-    batch are lost in the noise. This matters for gradient flow into the
-    SAV/IAV learnable parameters (`g`, `W_fuse`, `b_fuse`).
+PTV -- Prototype-Aware View
+---------------------------
+Following NRDMC IPM 2026 (Eq. 15, 20-22), we introduce K learnable prototypes
+``P in R^{K x d}``.  For every U-I edge (u, i) we score the *prototype
+compatibility* between user u and item i as
+
+    pi_i  = softmax( E_i @ P^T / tau_p , dim=-1 )     # (n_items, K)
+    pi_u  = softmax( E_u @ P^T / tau_p , dim=-1 )     # (n_users, K)
+    ptv_{u,i} = < pi_u , pi_i >                        # scalar in (0, 1]
+
+The prototype vectors ``P`` are trained end-to-end via gradient flow from the
+downstream InfoNCE view loss; no k-means initialisation is required (the
+NRDMC paper's Table 4 ablation confirms end-to-end updates are sufficient).
+
+Adaptive fusion is extended from K=2 to K=3 (Eq. 19 template):
+
+    w_final = w_shared + (w_sav - w_shared) + (w_iav - w_shared)
+                        + lambda_ptv * (w_ptv - w_shared)
+            = w_sav + w_iav + lambda_ptv * w_ptv - (1 + lambda_ptv) * w_shared
+
+``lambda_ptv = 0`` recovers the exact K=2 baseline bit-for-bit (used as the
+control cell in scripts/run_p3_ptv_grid.py).
+
+Everything else -- SAV/IAV formulation, InfoNCE, LightGCN view propagation --
+matches the K=2 module signature so upstream callers (model.py,
+compute_nrdmc_view_loss) require ZERO changes for the K=2 path.
+
+Runtime cost (Amazon Clothing, |E|=197 338, d=128, K=32, L=3, B=2048):
+  * PTV assignment (K=32) : ~ 2.5 * n_edges * K FLOPs = ~15 M ops (< 0.1% epoch)
+  * SAV+IAV+fusion         : ~ 100 M ops (unchanged)
+  * View GCN               : ~ 75 M ops  (unchanged)
 """
 from __future__ import annotations
 
@@ -45,13 +57,17 @@ import torch.nn.functional as F
 # View generator module
 # ---------------------------------------------------------------------------
 class NRDMCLiteView(nn.Module):
-    """SAV + IAV view generators, adaptive fusion, and view LightGCN.
+    """SAV + IAV (+ optional PTV) view generators, adaptive fusion, view LightGCN.
 
     Args:
         n_users : # user nodes.
         n_items : # item nodes.
         embed_dim: embedding dimensionality (matches the trunk).
         n_layers : # of LightGCN steps to propagate over the contrastive graph.
+        enable_ptv     : bool, if True adds the K=3 Prototype-Aware View path.
+        n_prototypes   : K, number of learnable prototypes (>=1 when enable_ptv).
+        lambda_ptv     : float, PTV mixing coefficient inside Eq. 19 fusion.
+                         0.0 -> exact K=2 baseline (bit-for-bit compat).
     """
 
     def __init__(
@@ -60,6 +76,10 @@ class NRDMCLiteView(nn.Module):
         n_items: int,
         embed_dim: int,
         n_layers: int = 2,
+        *,
+        enable_ptv: bool = False,
+        n_prototypes: int = 32,
+        lambda_ptv: float = 1.0,
     ) -> None:
         super().__init__()
         self.n_users = int(n_users)
@@ -68,16 +88,36 @@ class NRDMCLiteView(nn.Module):
         self.n_layers = int(n_layers)
 
         # IAV attention vector g \in R^d  (Eq. 16 of NRDMC IPM 2026).
-        # Xavier-like init: unit norm keeps β_{u,i} = σ((g·e_u)(g·e_i)) in [~0.5]
-        # at init when e_u, e_i are L2-normalised.
         g = torch.randn(embed_dim) / (embed_dim ** 0.5)
         self.g = nn.Parameter(g)
 
         # Adaptive-fusion transform (Eq. 17): scalar affine per view.
-        # A single (W, b) shared across the K views is the paper's default
-        # (it explicitly *shares* W to encourage the shared/specific split).
         self.W_fuse = nn.Parameter(torch.ones(1))
         self.b_fuse = nn.Parameter(torch.zeros(1))
+
+        # -------------------------------------------------------------------
+        # P3 (rev56) -- Prototype-Aware View.
+        # -------------------------------------------------------------------
+        self.enable_ptv: bool = bool(enable_ptv) and int(n_prototypes) > 0
+        self.n_prototypes: int = int(n_prototypes) if self.enable_ptv else 0
+        # lambda_ptv is intentionally kept as a plain Python float (NOT a
+        # Parameter) so the driver can pin it per grid cell without letting
+        # gradient descent trivially annihilate the new PTV branch.
+        self.lambda_ptv: float = float(lambda_ptv) if self.enable_ptv else 0.0
+
+        if self.enable_ptv:
+            # Xavier-scale init keeps < e_i, P_k > ~ 0 at t=0 so pi_i is
+            # near uniform. Training will sharpen cluster assignments.
+            proto = torch.randn(self.n_prototypes, embed_dim) / (embed_dim ** 0.5)
+            self.prototypes = nn.Parameter(proto)
+            # tau_p controls sharpness of the prototype softmax. Initialised
+            # at 1.0; a learnable scalar lets the model discover its own
+            # cluster-assignment temperature. We clamp its LOWER bound to
+            # 0.05 at read-time to avoid exp-overflow.
+            self.log_tau_p = nn.Parameter(torch.zeros(1))
+        else:
+            self.prototypes = None  # type: ignore[assignment]
+            self.log_tau_p = None   # type: ignore[assignment]
 
         # Edge topology cache (registered on first forward()).
         self._edge_u: Optional[torch.Tensor] = None
@@ -87,103 +127,147 @@ class NRDMCLiteView(nn.Module):
     #  Edge extraction (once per model)
     # ------------------------------------------------------------------
     def _ensure_edges(self, ui_mat: torch.Tensor) -> None:
-        """Extract the observed U-I edge list from the sparse bipartite adj.
-
-        The PACER trunk builds ``UI_mat`` as an (n_u+n_i, n_u+n_i) sparse
-        block-antidiagonal matrix with the top-right block = normalised R.
-        We recover the raw (u, i) pairs by reading the upper block.
-        """
         if self._edge_u is not None:
             return
         if not ui_mat.is_sparse:
             raise RuntimeError("NRDMCLiteView requires a sparse UI_mat input.")
-        indices = ui_mat.coalesce().indices()          # (2, 2E)
+        indices = ui_mat.coalesce().indices()
         rows, cols = indices[0], indices[1]
-        # Upper-right block: rows < n_users  and  cols >= n_users
         mask = (rows < self.n_users) & (cols >= self.n_users)
-        edge_u = rows[mask].contiguous()               # (E,)  in [0, n_users)
-        edge_i = (cols[mask] - self.n_users).contiguous()  # (E,)  in [0, n_items)
-        # Register as buffers so .to(device) migrates them with the module.
+        edge_u = rows[mask].contiguous()
+        edge_i = (cols[mask] - self.n_users).contiguous()
         self.register_buffer("_edge_u_buf", edge_u, persistent=False)
         self.register_buffer("_edge_i_buf", edge_i, persistent=False)
         self._edge_u = self._edge_u_buf
         self._edge_i = self._edge_i_buf
 
     # ------------------------------------------------------------------
-    #  SAV + IAV + adaptive fusion
+    #  PTV -- prototype-aware edge weight (P3)
+    # ------------------------------------------------------------------
+    def _ptv_weights(
+        self,
+        e_u: torch.Tensor,     # (n_users, d) L2-normalised
+        e_i: torch.Tensor,     # (n_items, d) L2-normalised
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Compute PTV edge weight and (mean) prototype-assignment entropy.
+
+        Returns:
+            ptv    : (E,) tensor of per-edge prototype-compatibility scores.
+            H_mean : scalar mean assignment entropy across the item side
+                     (for diagnostic logging; not backpropagated).
+
+        Math:
+            pi_i(k) = softmax_k( <E_i, P_k> / tau_p )         (n_items, K)
+            pi_u(k) = softmax_k( <E_u, P_k> / tau_p )         (n_users, K)
+            ptv_{u,i} = < pi_u , pi_i >   in (0, 1]           (E,)
+        """
+        assert self.enable_ptv, "PTV called with enable_ptv=False"
+        # Clamp tau_p at read-time to avoid overflow.
+        tau_p = torch.clamp(self.log_tau_p.exp(), min=0.05, max=20.0)
+        # (K, d)
+        proto = self.prototypes
+        # Logits: (n_items, K) and (n_users, K).
+        logits_i = (e_i @ proto.T) / tau_p
+        logits_u = (e_u @ proto.T) / tau_p
+        pi_i_full = F.softmax(logits_i, dim=-1)   # (n_items, K)
+        pi_u_full = F.softmax(logits_u, dim=-1)   # (n_users, K)
+        # Gather per-edge distributions and take inner product.
+        pi_u_edge = pi_u_full[self._edge_u]       # (E, K)
+        pi_i_edge = pi_i_full[self._edge_i]       # (E, K)
+        ptv = (pi_u_edge * pi_i_edge).sum(dim=-1) # (E,) in (0, 1]
+        # Diagnostic: mean entropy of item assignments (lower = sharper).
+        with torch.no_grad():
+            H_i = -(pi_i_full * (pi_i_full.clamp_min(1e-12)).log()).sum(dim=-1)
+            H_mean = H_i.mean()
+        return ptv, H_mean
+
+    # ------------------------------------------------------------------
+    #  SAV + IAV + adaptive fusion (K=2 or K=3)
     # ------------------------------------------------------------------
     def _edge_weights(
         self,
         e_u: torch.Tensor,
         e_i: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, dict]:
         """Compute learned edge weight w_final over the observed U-I edges.
 
-        Args:
-            e_u : (n_users, d) POST-GCN, L2-normalised user embeddings (Ẽ_u).
-            e_i : (n_items, d) POST-GCN, L2-normalised item embeddings (Ẽ_i).
-
         Returns:
-            w_final : (E,) tensor of per-edge weights, no clamp.
-
-        Note:
-            Forced to float32 so bf16/fp16 AMP cannot mix dtypes inside
-            ``scatter_add_`` / ``scatter_reduce_`` (PyTorch requires
-            self.dtype == src.dtype).
+            w_final : (E,) tensor of per-edge weights.
+            diag    : dict of scalar diagnostics for WandB logging.
         """
-        # fp32 for AMP-safe scatter reductions + stable softmax.
-        eu = e_u[self._edge_u].float()                # (E, d)
-        ei = e_i[self._edge_i].float()                # (E, d)
+        eu = e_u[self._edge_u].float()
+        ei = e_i[self._edge_i].float()
         g = self.g.float()
         w_fuse = self.W_fuse.float()
         b_fuse = self.b_fuse.float()
 
         # -- SAV (Eq. 14) --------------------------------------------------
-        # NRDMC writes SAV[u,i] = σ(Ẽ_u ⊙ Ẽ_i). Since SAV must be a scalar
-        # edge weight, we read this as σ(<Ẽ_u, Ẽ_i>) = σ of the dot product.
-        sav = torch.sigmoid((eu * ei).sum(dim=-1))    # (E,)
+        sav = torch.sigmoid((eu * ei).sum(dim=-1))     # (E,)
 
         # -- IAV (Eq. 16) --------------------------------------------------
-        # β_{u,i} = σ( (g^T Ẽ_u) · (g^T Ẽ_i) )
-        gu = eu @ g                                   # (E,)
-        gi = ei @ g                                   # (E,)
-        beta = torch.sigmoid(gu * gi)                 # (E,)
-
-        # Softmax normalise β over user's interacted-item neighbourhood.
-        # Numerically stable via max-shift + scatter-add.
+        gu = eu @ g
+        gi = ei @ g
+        beta = torch.sigmoid(gu * gi)                  # (E,)
         beta_max = torch.full(
-            (self.n_users,),
-            float("-inf"),
-            device=beta.device,
-            dtype=torch.float32,
+            (self.n_users,), float("-inf"),
+            device=beta.device, dtype=torch.float32,
         )
         beta_max.scatter_reduce_(
             0, self._edge_u, beta, reduce="amax", include_self=True
         )
-        # amax may leave un-touched users at -inf; mask them to 0 to avoid NaN
         beta_max = torch.where(
             torch.isinf(beta_max), torch.zeros_like(beta_max), beta_max
         )
-        exp_b = torch.exp(beta - beta_max[self._edge_u])   # (E,)
+        exp_b = torch.exp(beta - beta_max[self._edge_u])
         exp_sum = torch.zeros(
-            self.n_users, device=beta.device, dtype=torch.float32
+            self.n_users, device=beta.device, dtype=torch.float32,
         )
         exp_sum.scatter_add_(0, self._edge_u, exp_b)
-        iav = exp_b / (exp_sum[self._edge_u] + 1e-12)      # (E,)
+        iav = exp_b / (exp_sum[self._edge_u] + 1e-12)  # (E,)
 
         # -- Adaptive fusion (Eq. 17-19) -----------------------------------
-        # Per-view scalar affine transform f_k = tanh(W * w_k + b).
-        # Softmax attention over views -> shared component -> add specifics.
         f_sav = torch.tanh(w_fuse * sav + b_fuse)
         f_iav = torch.tanh(w_fuse * iav + b_fuse)
-        att = torch.softmax(
-            torch.stack([f_sav, f_iav], dim=0), dim=0
-        )  # (2, E)
-        w_shared = att[0] * sav + att[1] * iav                          # (E,)
-        # Eq. 19: w_final = w_shared + Σ_k (w_k - w_shared)
-        #                 = sav + iav - w_shared            (K = 2)
-        w_final = sav + iav - w_shared                                  # (E,)
-        return w_final
+
+        diag: dict = {}
+        if self.enable_ptv:
+            # PTV requires FULL user/item embedding tables, not per-edge.
+            ptv, H_mean = self._ptv_weights(e_u.float(), e_i.float())
+            f_ptv = torch.tanh(w_fuse * ptv + b_fuse)
+            att = torch.softmax(
+                torch.stack([f_sav, f_iav, f_ptv], dim=0), dim=0,
+            )                                          # (3, E)
+            w_shared = att[0] * sav + att[1] * iav + att[2] * ptv
+            # Eq. 19 (K=3, lambda-weighted PTV branch):
+            # w_final = w_shared
+            #          + (sav  - w_shared)
+            #          + (iav  - w_shared)
+            #          + lambda_ptv * (ptv - w_shared)
+            #        = sav + iav + lambda_ptv * ptv - (1 + lambda_ptv) * w_shared
+            w_final = (
+                sav + iav + self.lambda_ptv * ptv
+                - (1.0 + self.lambda_ptv) * w_shared
+            )
+            diag["ptv_edge_mean"] = float(ptv.mean().detach())
+            diag["ptv_edge_std"] = float(ptv.std().detach())
+            diag["ptv_entropy_i"] = float(H_mean.detach())
+            diag["ptv_tau_p"] = float(
+                torch.clamp(self.log_tau_p.exp(), min=0.05, max=20.0)
+                .detach()
+                .item()
+            )
+        else:
+            # K=2 legacy path (bit-for-bit identical to §8.2 rev55).
+            att = torch.softmax(
+                torch.stack([f_sav, f_iav], dim=0), dim=0,
+            )
+            w_shared = att[0] * sav + att[1] * iav
+            w_final = sav + iav - w_shared
+
+        diag["sav_mean"] = float(sav.mean().detach())
+        diag["iav_mean"] = float(iav.mean().detach())
+        diag["w_final_mean"] = float(w_final.mean().detach())
+        return w_final, diag
 
     # ------------------------------------------------------------------
     #  Contrastive-view LightGCN
@@ -194,34 +278,24 @@ class NRDMCLiteView(nn.Module):
         e_i_ego: torch.Tensor,
         w_final: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Run n_layers of LightGCN over the weighted contrastive graph.
-
-        Uses symmetric normalisation D^{-1/2} A D^{-1/2} on the LEARNED
-        edge weights, followed by layer-averaging (LightGCN default).
-        """
         device = e_u_ego.device
         n_total = self.n_users + self.n_items
-        # Keep sparse.mm + scatter_add in fp32 under AMP (bf16/fp16).
         w_final = w_final.float()
         e_u_ego = e_u_ego.float()
         e_i_ego = e_i_ego.float()
 
-        # Symmetric bipartite edges: [u -> i+n_users] and [i+n_users -> u]
         row = torch.cat([self._edge_u, self._edge_i + self.n_users], dim=0)
         col = torch.cat([self._edge_i + self.n_users, self._edge_u], dim=0)
         val = torch.cat([w_final, w_final], dim=0)
 
-        # Degree from the LEARNED weights.
         deg = torch.zeros(n_total, device=device, dtype=torch.float32)
         deg.scatter_add_(0, row, val)
-        # Clamp deg > 0 to avoid division blow-ups on isolated nodes.
         deg = deg.clamp_min(1e-12)
         deg_inv_sqrt = deg.pow(-0.5)
-        norm_val = deg_inv_sqrt[row] * val * deg_inv_sqrt[col]         # (2E,)
+        norm_val = deg_inv_sqrt[row] * val * deg_inv_sqrt[col]
 
         adj = torch.sparse_coo_tensor(
-            torch.stack([row, col], dim=0),
-            norm_val,
+            torch.stack([row, col], dim=0), norm_val,
             size=(n_total, n_total),
         ).coalesce()
 
@@ -244,35 +318,21 @@ class NRDMCLiteView(nn.Module):
         e_u_ego: torch.Tensor,
         e_i_ego: torch.Tensor,
         ui_mat: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Compute the contrastive-view embeddings E_bar_u, E_bar_i.
-
-        Args:
-            e_u_hat, e_i_hat : post-GCN embeddings from the PACER trunk
-                               (row-L2 normalised).  Used as Ẽ in the
-                               SAV/IAV formulas.
-            e_u_ego, e_i_ego : ego embeddings (the trainable
-                               nn.Embedding weights of the trunk).
-                               Used as the STARTING point for the view GCN.
-            ui_mat           : the bipartite sparse adjacency used by the
-                               trunk (for extracting edge topology).
+    ) -> Tuple[torch.Tensor, torch.Tensor, dict]:
+        """Compute view embeddings and return diagnostics.
 
         Returns:
-            (E_bar_u, E_bar_i)  — both (N_*, d), row-L2 normalised.
+            (E_bar_u, E_bar_i, diag)
         """
         self._ensure_edges(ui_mat)
-
-        # SAV / IAV / fusion are computed on the trunk's post-GCN embeddings.
         with torch.enable_grad():
             e_u_n = F.normalize(e_u_hat, dim=-1)
             e_i_n = F.normalize(e_i_hat, dim=-1)
-            w_final = self._edge_weights(e_u_n, e_i_n)                # (E,)
-
-        # View GCN propagates over the *ego* embeddings (LightGCN convention).
+            w_final, diag = self._edge_weights(e_u_n, e_i_n)
         e_bar_u, e_bar_i = self._propagate_view(e_u_ego, e_i_ego, w_final)
         e_bar_u = F.normalize(e_bar_u, dim=-1)
         e_bar_i = F.normalize(e_bar_i, dim=-1)
-        return e_bar_u, e_bar_i
+        return e_bar_u, e_bar_i, diag
 
 
 # ---------------------------------------------------------------------------
@@ -284,20 +344,6 @@ def _batchN_infonce(
     tau: torch.Tensor,
     batch_size: int = 2048,
 ) -> torch.Tensor:
-    """Batch-N InfoNCE (symmetric) between two L2-normalised (N, d) matrices.
-
-    L = 0.5 * ( CE(sim(e_hat, e_bar) / τ, diag) + CE(sim(e_bar, e_hat) / τ, diag) )
-    computed in row-chunks of size ``batch_size`` for memory.
-
-    Per-node losses are pooled with ``torch.cat(...).mean()`` so every row
-    contributes equally — including the final partial chunk. Averaging one
-    scalar ``cross_entropy`` per chunk would under-weight that remainder.
-
-    NB: identical semantics to
-    ``branchA_simgcl_batchN.simgcl_view_invariance_loss`` but hand-inlined
-    here to keep the module self-contained and importable at model-init time
-    without a dependency on the model.py view path.
-    """
     if e_hat.shape != e_bar.shape:
         raise ValueError(
             f"shape mismatch: e_hat={tuple(e_hat.shape)} "
@@ -311,10 +357,10 @@ def _batchN_infonce(
     losses: list[torch.Tensor] = []
     for start in range(0, n, batch_size):
         end = min(start + batch_size, n)
-        z1 = e_hat[start:end]                          # (B, d)
-        z2 = e_bar[start:end]                          # (B, d)
-        sim_12 = z1 @ z2.T / tau_c                     # (B, B)
-        sim_21 = z2 @ z1.T / tau_c                     # (B, B)
+        z1 = e_hat[start:end]
+        z2 = e_bar[start:end]
+        sim_12 = z1 @ z2.T / tau_c
+        sim_21 = z2 @ z1.T / tau_c
         log_p_12 = F.log_softmax(sim_12, dim=-1)
         log_p_21 = F.log_softmax(sim_21, dim=-1)
         diag_idx = torch.arange(end - start, device=e_hat.device)
@@ -334,19 +380,17 @@ def compute_nrdmc_view_loss(
     ui_mat: torch.Tensor,
     tau: torch.Tensor,
     batch_size: int = 2048,
-) -> torch.Tensor:
-    """Top-level entry called from ``model.simgcl_view_forward`` when the
-    NRDMC-lite branch is active.
+    return_diag: bool = False,
+):
+    """Top-level entry from ``model.simgcl_view_forward``.
 
-    Returns a scalar loss L_mv = 0.5 * (L_mv_user + L_mv_item),
-    computed as batch-N InfoNCE between ê (post-GCN trunk output) and
-    ē (contrastive-view LightGCN output).
+    Backward-compat:
+        return_diag=False  -> returns scalar loss tensor (same as rev55).
+        return_diag=True   -> returns (loss, diag_dict).
     """
-    # Disable autocast: scatter_add_/sparse.mm require matching dtypes, and
-    # bf16 AMP otherwise mixes Parameter (fp32) with activation (bf16).
     device_type = e_u_hat.device.type
     with torch.amp.autocast(device_type=device_type, enabled=False):
-        e_bar_u, e_bar_i = view_module(
+        e_bar_u, e_bar_i, diag = view_module(
             e_u_hat.float(),
             e_i_hat.float(),
             e_u_ego.float(),
@@ -358,7 +402,10 @@ def compute_nrdmc_view_loss(
         tau_f = tau.float() if torch.is_tensor(tau) else tau
         L_user = _batchN_infonce(e_hat_u_n, e_bar_u, tau_f, batch_size)
         L_item = _batchN_infonce(e_hat_i_n, e_bar_i, tau_f, batch_size)
-        return 0.5 * (L_user + L_item)
+        loss = 0.5 * (L_user + L_item)
+    if return_diag:
+        return loss, diag
+    return loss
 
 
 __all__ = ["NRDMCLiteView", "compute_nrdmc_view_loss"]

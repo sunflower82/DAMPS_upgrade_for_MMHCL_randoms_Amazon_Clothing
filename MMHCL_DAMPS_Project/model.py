@@ -200,6 +200,10 @@ class DAMPS_MMHCL(nn.Module):
         # ---- Branch A' / NRDMC-lite (rev55 §8.2) -- learnable view generators ----
         enable_nrdmc_lite: bool = False,
         nrdmc_lite_layers: int = 2,
+        # ---- Branch A' / P3 (rev56) -- Prototype-Aware View (PTV) ----
+        enable_ptv: bool = False,
+        n_prototypes: int = 32,
+        lambda_ptv: float = 1.0,
     ) -> None:
         super().__init__()
 
@@ -454,6 +458,10 @@ class DAMPS_MMHCL(nn.Module):
         # See ``damps/nrdmc_lite.py`` for the math + design notes.
         self.enable_nrdmc_lite: bool = bool(enable_nrdmc_lite)
         self.nrdmc_lite_layers: int = int(nrdmc_lite_layers)
+        # ---- P3 (rev56) Prototype-Aware View ----
+        self.enable_ptv: bool = bool(enable_ptv)
+        self.n_prototypes: int = int(n_prototypes)
+        self.lambda_ptv: float = float(lambda_ptv)
         if self.enable_nrdmc_lite:
             # Lazy import so the SimGCL-only path has zero import cost.
             from damps.nrdmc_lite import NRDMCLiteView  # pylint: disable=C0415
@@ -462,6 +470,9 @@ class DAMPS_MMHCL(nn.Module):
                 n_items=self.n_items,
                 embed_dim=self.embedding_dim,
                 n_layers=self.nrdmc_lite_layers,
+                enable_ptv=self.enable_ptv,
+                n_prototypes=self.n_prototypes,
+                lambda_ptv=self.lambda_ptv,
             )
         else:
             self.nrdmc_lite_view = None  # type: ignore[assignment]
