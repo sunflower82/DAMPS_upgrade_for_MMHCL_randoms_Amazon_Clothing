@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Windows host setup for PACER / NRDMC-lite training speedups.
@@ -19,7 +19,7 @@
 
 .PARAMETER RepoRoot
   Absolute path to the DAMPS_upgrade_for_MMHCL_randoms_Amazon_Clothing repo.
-  Defaults to two levels above this script (…/MMHCL_DAMPS_Project/scripts).
+  Defaults to two levels above this script (.../MMHCL_DAMPS_Project/scripts).
 
 .PARAMETER NumThreads
   Per-process CPU thread cap (OMP/MKL/PACER_NUM_THREADS). Default 4.
@@ -95,7 +95,7 @@ if (-not $SkipDefender) {
     Write-Host "[Step 3 / E.1] Windows Defender exclusions"
     if (-not (Test-IsAdmin)) {
         Write-Warning (
-            "Not elevated — skipping Defender exclusions. " +
+            "Not elevated - skipping Defender exclusions. " +
             "Re-run as Administrator, or pass -SkipDefender."
         )
     } else {
@@ -130,7 +130,7 @@ if (-not $SkipPower) {
     Write-Host "[Step 4 / E.2] Ultimate Performance power plan + core parking"
     if (-not (Test-IsAdmin)) {
         Write-Warning (
-            "Not elevated — skipping powercfg. " +
+            "Not elevated - skipping powercfg. " +
             "Re-run as Administrator, or pass -SkipPower."
         )
     } else {
@@ -138,11 +138,11 @@ if (-not $SkipPower) {
         $ultimateGuid = "e9a42b02-d5df-448d-aa00-03f14749eb61"
         $listed = & powercfg.exe /list 2>&1 | Out-String
         if ($listed -notmatch $ultimateGuid) {
-            Write-Host "  Duplicating Ultimate Performance scheme…"
+            Write-Host "  Duplicating Ultimate Performance scheme..."
             & powercfg.exe /duplicatescheme $ultimateGuid | Out-Null
         }
         # Activate the Ultimate Performance GUID (or the duplicate's GUID if
-        # Windows assigned a new one — fall back to matching by name).
+        # Windows assigned a new one - fall back to matching by name).
         $activeSet = $false
         try {
             & powercfg.exe /setactive $ultimateGuid 2>$null
@@ -184,7 +184,7 @@ $blocking = [Environment]::GetEnvironmentVariable(
 )
 if ($blocking -and $blocking -ne "0") {
     Write-Warning (
-        "CUDA_LAUNCH_BLOCKING=$blocking is set — removing for this session " +
+        "CUDA_LAUNCH_BLOCKING=$blocking is set - removing for this session " +
         "(debug flag serialises every kernel launch)."
     )
     Remove-Item Env:CUDA_LAUNCH_BLOCKING -ErrorAction SilentlyContinue
@@ -249,5 +249,5 @@ Write-Host ""
 Write-Host "Done. Launch training from this shell so session env vars apply."
 Write-Host (
     "Code-side speedups (TF32 / fused Adam / inference_mode / GPU sample) " +
-    "live in train.py + load_data.py — no further action required."
+    "live in train.py + load_data.py - no further action required."
 )
