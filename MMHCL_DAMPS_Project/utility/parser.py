@@ -421,6 +421,14 @@ def parse_args() -> argparse.Namespace:
                         help="1 = compile with dynamic=True (required because "
                              "the BPR triplet batch size can vary by 1 between "
                              "epochs).")
+    parser.add_argument(
+        "--use_gpu_sample",
+        type=int,
+        default=1,
+        help="1 = sample BPR triplets on GPU (speedup guide Section C / "
+             "GPU-side negative sampling; ~3-5x vs CPU on batch 1024). "
+             "0 = legacy CPU rejection sampling in Data.sample().",
+    )
 
     # =====================================================================
     #  Ablation Tag

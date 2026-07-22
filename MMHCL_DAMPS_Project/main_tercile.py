@@ -73,7 +73,7 @@ print(
 
 
 # --- 3. GPU-batched tercile recall evaluator (no multiprocessing) ---------
-@torch.no_grad()
+@torch.inference_mode()
 def compute_tercile_recall(
     ua: torch.Tensor,
     ia: torch.Tensor,
@@ -140,7 +140,7 @@ _have_test_tercile = [False]
 _orig_test = train.Trainer.test
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def _forward_embeddings(self):
     """One extra eval-mode forward pass to read u_ui_emb / i_ui_emb.
 

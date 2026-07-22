@@ -267,6 +267,65 @@ class Data:
             if cand not in seen:
                 return cand
 
+    def _ensure_gpu_sample_cache(self, device: torch.device) -> None:
+        """Build padded positive-item tables on ``device`` (once per device)."""
+        cache_dev = getattr(self, "_gpu_sample_device", None)
+        if (
+            cache_dev is not None
+            and cache_dev == device
+            and hasattr(self, "_exist_users_t")
+        ):
+            return
+
+        exist = torch.tensor(self.exist_users, dtype=torch.long, device=device)
+        max_len = max(len(self.train_items[u]) for u in self.exist_users)
+        # Pad with the first positive so out-of-range gathers stay valid.
+        pos_pad = torch.zeros(
+            (self.n_users, max_len), dtype=torch.long, device=device
+        )
+        pos_lens = torch.ones(self.n_users, dtype=torch.long, device=device)
+        for u in self.exist_users:
+            items = self.train_items[u]
+            n = len(items)
+            pos_pad[u, :n] = torch.tensor(items, dtype=torch.long, device=device)
+            if n < max_len:
+                pos_pad[u, n:] = items[0]
+            pos_lens[u] = n
+
+        self._exist_users_t = exist
+        self._pos_pad_t = pos_pad
+        self._pos_lens_t = pos_lens
+        self._gpu_sample_device = device
+
+    def sample_gpu(
+        self,
+        device: torch.device,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """GPU BPR triplet sampling (speedup guide Section C / step 7).
+
+        Negatives are drawn uniformly on-device; collisions with a user's
+        positives (~1% on Clothing density) are ignored — the same
+        approximation used by SASRec / LightGCN.
+
+        Args:
+            device: CUDA (or CPU) device that owns the returned tensors.
+
+        Returns:
+            ``(users, pos_items, neg_items)`` each of shape ``[batch_size]``.
+        """
+        self._ensure_gpu_sample_cache(device)
+        bsz = self.batch_size
+        n_exist = self._exist_users_t.numel()
+        u_idx = torch.randint(0, n_exist, (bsz,), device=device)
+        users = self._exist_users_t[u_idx]
+        lens = self._pos_lens_t[users]
+        # Uniform index in [0, len_u) per row.
+        offsets = (torch.rand(bsz, device=device) * lens.float()).long()
+        offsets = torch.minimum(offsets, lens - 1)
+        pos_items = self._pos_pad_t[users, offsets]
+        neg_items = torch.randint(0, self.n_items, (bsz,), device=device)
+        return users, pos_items, neg_items
+
     # ==================================================================
     #  Sparse helpers
     # ==================================================================

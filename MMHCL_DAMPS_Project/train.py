@@ -52,6 +52,28 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 # -------------------------------------------------------------------------
+# Speedup guide Section F steps 1 + B.5 -- TF32 / cuDNN / reduced-precision
+# -------------------------------------------------------------------------
+# Blackwell fully supports TF32 (~8x fp32 matmul throughput). Fixed shapes
+# throughout PACER training make cudnn.benchmark a pure win after the first
+# autotune batch. Reduced-precision reductions speed sparse.mm on sm_120.
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+    torch.set_float32_matmul_precision("high")
+    _rp = torch.backends.cuda.matmul
+    if hasattr(_rp, "allow_fp16_reduced_precision_reduction"):
+        _rp.allow_fp16_reduced_precision_reduction = True
+    if hasattr(_rp, "allow_bf16_reduced_precision_reduction"):
+        _rp.allow_bf16_reduced_precision_reduction = True
+
+# Cap CPU oversubscription when many grid subprocesses share one host
+# (speedup guide Section C -- torch.set_num_threads).
+_cpu_threads = int(os.environ.get("PACER_NUM_THREADS", "4"))
+torch.set_num_threads(max(1, _cpu_threads))
+
+# -------------------------------------------------------------------------
 # torch.compile + complex-FFT backward Inductor crash workaround
 # -------------------------------------------------------------------------
 # PyTorch's Inductor backward compiler on Windows/CUDA builds currently has
@@ -435,7 +457,33 @@ class Trainer:
         )
 
         # ---------------- Optimizer & schedulers ----------------
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+        # Speedup guide Section F step 2 -- fused Adam (fewer CUDA launches;
+        # especially helpful on Windows where launch latency is ~2x Linux).
+        # Fall back to foreach=, then to the stock eager Adam.
+        _adam_kwargs: dict[str, Any] = {"lr": self.lr}
+        self.optimizer: optim.Optimizer
+        try:
+            self.optimizer = optim.Adam(
+                self.model.parameters(), fused=True, **_adam_kwargs
+            )
+            self.logger.logging("[speedup] Adam fused=True")
+        except (RuntimeError, TypeError, ValueError) as exc:
+            try:
+                self.optimizer = optim.Adam(
+                    self.model.parameters(), foreach=True, **_adam_kwargs
+                )
+                self.logger.logging(
+                    f"[speedup] Adam fused unavailable ({exc}); "
+                    "using foreach=True"
+                )
+            except (RuntimeError, TypeError, ValueError):
+                self.optimizer = optim.Adam(
+                    self.model.parameters(), **_adam_kwargs
+                )
+                self.logger.logging(
+                    f"[speedup] Adam fused/foreach unavailable ({exc}); "
+                    "using eager Adam"
+                )
         self.lr_scheduler: optim.lr_scheduler.LambdaLR = optim.lr_scheduler.LambdaLR(
             self.optimizer, lr_lambda=lambda e: 0.96 ** (e / 50)
         )
@@ -513,7 +561,7 @@ class Trainer:
     # ------------------------------------------------------------------
     #  Pattern B' Scheduled Rebuild
     # ------------------------------------------------------------------
-    @torch.no_grad()
+    @torch.inference_mode()
     def maybe_rebuild_hypergraph(self, epoch: int) -> None:
         """
         Rebuild the item-item multi-modal hypergraph from the Slim Momentum
@@ -559,7 +607,7 @@ class Trainer:
     # ------------------------------------------------------------------
     #  Evaluation
     # ------------------------------------------------------------------
-    @torch.no_grad()
+    @torch.inference_mode()
     def test(self, users_to_test: list[int], is_val: bool) -> dict[str, Any]:
         self.model.eval()
         out = self.model(
@@ -693,10 +741,23 @@ class Trainer:
             for batch_idx in range(n_batch):
                 self.optimizer.zero_grad()
 
-                users_list, pos_list, neg_list = data_generator.sample()
-                users_t = torch.tensor(users_list, dtype=torch.long, device=self.device)
-                pos_t = torch.tensor(pos_list, dtype=torch.long, device=self.device)
-                neg_t = torch.tensor(neg_list, dtype=torch.long, device=self.device)
+                # Speedup guide Section C / F step 7 -- GPU BPR sampling
+                # (flag --use_gpu_sample; default on for CUDA).
+                if bool(getattr(args, "use_gpu_sample", 0)):
+                    users_t, pos_t, neg_t = data_generator.sample_gpu(
+                        self.device
+                    )
+                else:
+                    users_list, pos_list, neg_list = data_generator.sample()
+                    users_t = torch.tensor(
+                        users_list, dtype=torch.long, device=self.device
+                    )
+                    pos_t = torch.tensor(
+                        pos_list, dtype=torch.long, device=self.device
+                    )
+                    neg_t = torch.tensor(
+                        neg_list, dtype=torch.long, device=self.device
+                    )
 
                 # Items covered by this batch (for the Slim Momentum write)
                 batch_items = torch.cat([pos_t, neg_t]).unique()
@@ -778,7 +839,7 @@ class Trainer:
 
             # ---------------- Per-epoch EMA MAD diagnostic ----------------
             if args.damps_avrf:
-                with torch.no_grad():
+                with torch.inference_mode():
                     h_img_raw = self.model.image_proj(self.model.raw_image)
                     h_txt_raw = self.model.text_proj(self.model.raw_text)
                     h_aud_raw = (
@@ -800,7 +861,8 @@ class Trainer:
             elapsed = time() - t0
 
             # ---------------- Diagnostic logging ----------------
-            diag = self.model.diagnostics()
+            with torch.inference_mode():
+                diag = self.model.diagnostics()
             if epoch % self.rebuild_R == 0:
                 self.logger.logging(
                     f"[diag epoch {epoch}] tau={diag['tau_clamped']:.4f} "
