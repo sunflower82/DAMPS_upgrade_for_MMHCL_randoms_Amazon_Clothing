@@ -530,6 +530,16 @@ class Trainer:
         self._cuda_graph_item_len: int = 0
         self._last_eval_ua: torch.Tensor | None = None
         self._last_eval_ia: torch.Tensor | None = None
+        # Split tag for the cached eval embeddings above -- consumed by
+        # main_tercile._forward_embeddings() to guard against reusing the
+        # wrong split's embeddings if the val/test call order ever changes.
+        self._last_eval_split: str | None = None
+        # WandB-audit flag: True iff torch.compile was actually attached
+        # to self.model.damps (i.e. the Inductor complex-FFT probe passed
+        # AND the compile() call did not throw). Logged into wandb.config
+        # below so post-hoc analysis can separate 'compile enabled' from
+        # 'compile skipped' runs after PyTorch upgrades.
+        self._compile_attached: bool = False
         if bool(args.use_torch_compile) and hasattr(torch, "compile"):
             if not _get_inductor_complex_backward_ok():
                 self.logger.logging(
@@ -558,6 +568,7 @@ class Trainer:
                         mode=str(args.torch_compile_mode),
                         dynamic=_dyn,
                     )
+                    self._compile_attached = True
                     self.logger.logging(
                         f"[speedup] torch.compile enabled on DAMPS submodule "
                         f"(mode={args.torch_compile_mode}, "
@@ -675,8 +686,11 @@ class Trainer:
             update_momentum=False,
         )
         # Cache for main_tercile (avoids a second full forward for Head/Mid/Tail).
+        # Tag the split so _forward_embeddings() can refuse a stale reuse if
+        # the caller ever interleaves val/test in a non-standard order.
         self._last_eval_ua = out["u_ui_emb"]
         self._last_eval_ia = out["i_ui_emb"]
+        self._last_eval_split = "val" if is_val else "test"
         return test_torch(out["u_ui_emb"], out["i_ui_emb"], users_to_test, is_val)
 
     # ------------------------------------------------------------------
@@ -896,6 +910,25 @@ class Trainer:
                 self.logger.logging(
                     f"[wandb] define_metric() unavailable in this wandb "
                     f"version ({exc}); charts will fall back to _step."
+                )
+
+            # ----- Audit-trail speedup flags in wandb.config -----
+            # Persist whether torch.compile actually attached and whether
+            # the CUDAGraph train-step is armed for THIS run. Enables
+            # post-hoc filtering ("only runs where compile_attached=True")
+            # once a future PyTorch build fixes the Inductor complex-FFT
+            # backward path.
+            try:
+                self.wandb.config.update(
+                    {
+                        "compile_attached": bool(self._compile_attached),
+                        "cuda_graph_enabled": bool(self._cuda_graph_enabled),
+                    },
+                    allow_val_change=True,
+                )
+            except Exception as exc:                                # pragma: no cover
+                self.logger.logging(
+                    f"[wandb] config.update(compile_attached) skipped: {exc}"
                 )
 
         n_batch = data_generator.n_train // self.batch_size + 1

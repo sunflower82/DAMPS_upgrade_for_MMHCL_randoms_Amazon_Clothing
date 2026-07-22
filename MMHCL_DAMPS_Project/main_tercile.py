@@ -191,15 +191,28 @@ _orig_test = train.Trainer.test
 
 
 @torch.inference_mode()
-def _forward_embeddings(self):
+def _forward_embeddings(self, requested_split: str | None = None):
     """One eval-mode forward pass to read u_ui_emb / i_ui_emb.
 
     Prefer ``Trainer._last_eval_ua/ia`` (populated by ``test()``) so the
     tercile pass does not pay for a second full forward.
+
+    ``requested_split`` (``"val"`` or ``"test"``) guards the cache: we
+    only reuse the cached embeddings when ``Trainer._last_eval_split``
+    matches, otherwise we fall through to a fresh forward. This defends
+    against silent bugs if the val/test call order is ever reshuffled
+    -- e.g. if a future hook computes tercile on TEST before ``test()``
+    has been called on the TEST split, we would otherwise read stale
+    VAL embeddings.
     """
     ua = getattr(self, "_last_eval_ua", None)
     ia = getattr(self, "_last_eval_ia", None)
-    if ua is not None and ia is not None:
+    cached_split = getattr(self, "_last_eval_split", None)
+    if (
+        ua is not None
+        and ia is not None
+        and (requested_split is None or cached_split == requested_split)
+    ):
         return ua, ia
     was_training = self.model.training
     self.model.eval()
@@ -223,7 +236,7 @@ def _test_with_terciles(self, users_to_test, is_val):
 
     if is_val:
         # ---- VAL branch: compute per-tercile Recall@20 on the val split.
-        ua, ia = _forward_embeddings(self)
+        ua, ia = _forward_embeddings(self, requested_split="val")
         ter = compute_tercile_recall(ua, ia, users_to_test, data_generator.val_set)
         _last_val_tercile.update(ter)
         _have_val_tercile[0] = True
@@ -268,7 +281,7 @@ def _test_with_terciles(self, users_to_test, is_val):
         # val_recall@20 OR val_ndcg@20 improved (train.py:789). To match
         # BEST_Test_Recall@20 semantics we snapshot _best_test_tercile ONLY
         # when val_recall bumped its peak in the SAME epoch (train.py:801).
-        ua, ia = _forward_embeddings(self)
+        ua, ia = _forward_embeddings(self, requested_split="test")
         ter_t = compute_tercile_recall(ua, ia, users_to_test, data_generator.test_set)
         _last_test_tercile.update(ter_t)
         _have_test_tercile[0] = True
