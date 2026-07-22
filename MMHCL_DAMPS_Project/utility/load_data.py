@@ -327,6 +327,78 @@ class Data:
         return users, pos_items, neg_items
 
     # ==================================================================
+    #  GPU eval masks (PACER_NRDMC_lite_eval_bottleneck_EN §4)
+    # ==================================================================
+    def _build_bool_mask(
+        self,
+        user_items: dict[int, list[int]],
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Dense ``[n_users, n_items]`` bool mask from a user→items map."""
+        mask = torch.zeros(
+            (self.n_users, self.n_items), dtype=torch.bool, device=device
+        )
+        if not user_items:
+            return mask
+        rows: list[int] = []
+        cols: list[int] = []
+        for uid, items in user_items.items():
+            if not items:
+                continue
+            u = int(uid)
+            rows.extend([u] * len(items))
+            cols.extend(int(i) for i in items)
+        if rows:
+            mask[
+                torch.tensor(rows, dtype=torch.long, device=device),
+                torch.tensor(cols, dtype=torch.long, device=device),
+            ] = True
+        return mask
+
+    def get_train_mask_gpu(self, device: torch.device) -> torch.Tensor:
+        """Cached train-item exclusion mask ``[n_users, n_items]`` on device."""
+        cache = getattr(self, "_train_mask_gpu", None)
+        cache_dev = getattr(self, "_train_mask_device", None)
+        if cache is not None and cache_dev == device:
+            return cache
+        mask = self._build_bool_mask(self.train_items, device)
+        self._train_mask_gpu = mask
+        self._train_mask_device = device
+        return mask
+
+    def get_gt_mask_gpu(
+        self,
+        is_val: bool,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Cached ground-truth mask for val (``is_val``) or test split."""
+        attr = "_val_mask_gpu" if is_val else "_test_mask_gpu"
+        dev_attr = "_val_mask_device" if is_val else "_test_mask_device"
+        cache = getattr(self, attr, None)
+        cache_dev = getattr(self, dev_attr, None)
+        if cache is not None and cache_dev == device:
+            return cache
+        src = self.val_set if is_val else self.test_set
+        mask = self._build_bool_mask(src, device)
+        setattr(self, attr, mask)
+        setattr(self, dev_attr, device)
+        return mask
+
+    def get_gt_counts(
+        self,
+        users: list[int] | torch.Tensor,
+        is_val: bool,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Per-user ground-truth positive counts for ``users`` on ``device``."""
+        gt = self.get_gt_mask_gpu(is_val, device)
+        if isinstance(users, list):
+            users_t = torch.tensor(users, dtype=torch.long, device=device)
+        else:
+            users_t = users.to(device=device, dtype=torch.long)
+        return gt[users_t].sum(dim=1).to(dtype=torch.float32)
+
+    # ==================================================================
     #  Sparse helpers
     # ==================================================================
     def sparse_mx_to_torch_sparse_tensor(self, sparse_mx: sp.spmatrix) -> torch.Tensor:

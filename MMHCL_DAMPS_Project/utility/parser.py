@@ -133,6 +133,29 @@ def parse_args() -> argparse.Namespace:
                         help="Cut-offs for Recall/Precision/NDCG/Hit@K.")
     parser.add_argument("--test_flag", type=str, default="part",
                         help="{part, full}. 'part' = heapq top-K (faster).")
+    parser.add_argument(
+        "--use_gpu_eval",
+        type=int,
+        default=1,
+        help="1 = GPU-native test_torch (eval bottleneck guide §4; "
+             "~5-8x faster eval). 0 = legacy CPU multiprocessing Pool "
+             "path (kept for metric-equivalence audits).",
+    )
+    parser.add_argument(
+        "--eval_every",
+        type=int,
+        default=0,
+        help="Run validation every N epochs. 0 = fall back to --verbose "
+             "(legacy). Eval-bottleneck guide recommends 5. Always eval "
+             "in the last --eval_last_epochs epochs regardless.",
+    )
+    parser.add_argument(
+        "--eval_last_epochs",
+        type=int,
+        default=20,
+        help="Always run eval during the final N epochs of --epoch "
+             "(used with --eval_every > 0). Default 20.",
+    )
 
     # =====================================================================
     #  Early Stopping

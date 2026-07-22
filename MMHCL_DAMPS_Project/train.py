@@ -900,7 +900,19 @@ class Trainer:
                 self.wandb.log(_wb_payload)
 
             # ---------------- Skip evaluation on non-eval epochs ----------------
-            if (epoch + 1) % args.verbose != 0:
+            # --eval_every N (bottleneck guide §5.2): evaluate every N epochs,
+            # but always evaluate in the last --eval_last_epochs. When
+            # --eval_every is 0, preserve the legacy --verbose cadence.
+            eval_every = int(getattr(args, "eval_every", 0) or 0)
+            eval_last = int(getattr(args, "eval_last_epochs", 20) or 0)
+            if eval_every > 0:
+                in_tail = (
+                    eval_last > 0 and (epoch + 1) > (args.epoch - eval_last)
+                )
+                do_eval = in_tail or ((epoch + 1) % eval_every == 0)
+            else:
+                do_eval = ((epoch + 1) % args.verbose == 0)
+            if not do_eval:
                 self.logger.logging(
                     f"Epoch {epoch} [{elapsed:.1f}s]: "
                     f"loss={loss:.5f}  mf={mf_loss:.5f}  emb={emb_loss:.5f}  "
