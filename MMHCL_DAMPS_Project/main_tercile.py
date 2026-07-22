@@ -72,7 +72,34 @@ print(
 )
 
 
-# --- 3. GPU-batched tercile recall evaluator (no multiprocessing) ---------
+# --- 3. GPU-native tercile recall evaluator -------------------------------
+# Bool masks over the catalogue, built once and moved with the embeddings.
+_TAIL_MASK_CPU = torch.zeros(_n_items, dtype=torch.bool)
+_MID_MASK_CPU = torch.zeros(_n_items, dtype=torch.bool)
+_HEAD_MASK_CPU = torch.zeros(_n_items, dtype=torch.bool)
+if TAIL_IDS:
+    _TAIL_MASK_CPU[list(TAIL_IDS)] = True
+if MID_IDS:
+    _MID_MASK_CPU[list(MID_IDS)] = True
+if HEAD_IDS:
+    _HEAD_MASK_CPU[list(HEAD_IDS)] = True
+_tercile_mask_cache: dict[torch.device, tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = {}
+
+
+def _tercile_masks_on(device: torch.device) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return (head, mid, tail) bool masks cached on ``device``."""
+    cached = _tercile_mask_cache.get(device)
+    if cached is not None:
+        return cached
+    masks = (
+        _HEAD_MASK_CPU.to(device),
+        _MID_MASK_CPU.to(device),
+        _TAIL_MASK_CPU.to(device),
+    )
+    _tercile_mask_cache[device] = masks
+    return masks
+
+
 @torch.inference_mode()
 def compute_tercile_recall(
     ua: torch.Tensor,
@@ -81,45 +108,68 @@ def compute_tercile_recall(
     ground_truth: dict[int, list[int]],
     K: int = 20,
 ) -> dict[str, float]:
-    """Recall@K restricted to each popularity tercile.
+    """Recall@K restricted to each popularity tercile (GPU-native).
 
     Per-user tercile recall = |hits in top-K that fall in tercile AND
     are ground-truth| / |ground-truth positives that fall in tercile|.
     Users with zero tercile-positives are skipped for that tercile
     (matches Milogradskii et al. 2024, Krichene & Rendle 2020).
     """
-    head_scores: list[float] = []
-    mid_scores:  list[float] = []
-    tail_scores: list[float] = []
-    ubs = 2048  # user-batch size for scoring
-    for start in range(0, len(users_to_test), ubs):
-        batch = users_to_test[start : start + ubs]
-        ub = ua[batch]                                # (B, d)
-        rate = (ub @ ia.T).cpu().numpy()              # (B, n_items)
-        for row, u in enumerate(batch):
-            scores = rate[row].copy()
-            for ti in data_generator.train_items.get(u, []):
-                scores[ti] = -1e9                     # exclude trained items
-            ground = ground_truth.get(u, [])
-            if not ground:
+    if not users_to_test:
+        return {"head": float("nan"), "mid": float("nan"), "tail": float("nan")}
+
+    device = ua.device
+    is_val = ground_truth is data_generator.val_set
+    train_mask = data_generator.get_train_mask_gpu(device)
+    gt_mask = data_generator.get_gt_mask_gpu(is_val, device)
+    head_m, mid_m, tail_m = _tercile_masks_on(device)
+
+    users_t = torch.tensor(users_to_test, dtype=torch.long, device=device)
+    ubs = 2048
+    # Accumulate sum of per-user recalls and count of eligible users.
+    sums = {
+        "head": torch.zeros((), device=device, dtype=torch.float64),
+        "mid": torch.zeros((), device=device, dtype=torch.float64),
+        "tail": torch.zeros((), device=device, dtype=torch.float64),
+    }
+    counts = {
+        "head": torch.zeros((), device=device, dtype=torch.float64),
+        "mid": torch.zeros((), device=device, dtype=torch.float64),
+        "tail": torch.zeros((), device=device, dtype=torch.float64),
+    }
+    terciles = (
+        ("head", head_m),
+        ("mid", mid_m),
+        ("tail", tail_m),
+    )
+
+    for start in range(0, users_t.numel(), ubs):
+        batch = users_t[start : start + ubs]
+        scores = ua[batch] @ ia.T
+        scores = scores.masked_fill(train_mask[batch], float("-inf"))
+        _vals, top_idx = torch.topk(scores, k=K, dim=1)  # [B, K]
+        hit_any = gt_mask[batch.unsqueeze(1), top_idx]  # [B, K] bool
+
+        for name, tmask in terciles:
+            # GT positives that fall in this tercile.
+            n_gt = (gt_mask[batch] & tmask).sum(dim=1).to(torch.float32)
+            # Hits in top-K that are GT and in this tercile.
+            in_tercile = tmask[top_idx]  # [B, K]
+            n_hit = (hit_any & in_tercile).sum(dim=1).to(torch.float32)
+            eligible = n_gt > 0
+            if not bool(eligible.any()):
                 continue
-            top = np.argpartition(-scores, K)[:K]
-            top = top[np.argsort(-scores[top])].tolist()
-            gset = set(int(x) for x in ground)
-            for tercile, out in (
-                (HEAD_IDS, head_scores),
-                (MID_IDS,  mid_scores),
-                (TAIL_IDS, tail_scores),
-            ):
-                gt_in_tercile = gset & tercile
-                if not gt_in_tercile:
-                    continue
-                hits = sum(
-                    1 for it in top if int(it) in tercile and int(it) in gt_in_tercile
-                )
-                out.append(hits / len(gt_in_tercile))
-    _m = lambda xs: float(np.mean(xs)) if xs else float("nan")
-    return {"head": _m(head_scores), "mid": _m(mid_scores), "tail": _m(tail_scores)}
+            rec = n_hit[eligible] / n_gt[eligible]
+            sums[name] = sums[name] + rec.sum().to(torch.float64)
+            counts[name] = counts[name] + eligible.sum().to(torch.float64)
+
+    def _mean(name: str) -> float:
+        c = float(counts[name].item())
+        if c <= 0:
+            return float("nan")
+        return float(sums[name].item() / c)
+
+    return {"head": _mean("head"), "mid": _mean("mid"), "tail": _mean("tail")}
 
 
 # --- 4. Shared state -------------------------------------------------------
@@ -142,12 +192,15 @@ _orig_test = train.Trainer.test
 
 @torch.inference_mode()
 def _forward_embeddings(self):
-    """One extra eval-mode forward pass to read u_ui_emb / i_ui_emb.
+    """One eval-mode forward pass to read u_ui_emb / i_ui_emb.
 
-    PACER's model.forward returns a dict. ``update_momentum=False`` disables
-    Slim Momentum EMA writes; ``epoch=0`` is inert because ``set_epoch`` is
-    guarded by ``self.training`` inside model.py.
+    Prefer ``Trainer._last_eval_ua/ia`` (populated by ``test()``) so the
+    tercile pass does not pay for a second full forward.
     """
+    ua = getattr(self, "_last_eval_ua", None)
+    ia = getattr(self, "_last_eval_ia", None)
+    if ua is not None and ia is not None:
+        return ua, ia
     was_training = self.model.training
     self.model.eval()
     try:

@@ -432,18 +432,22 @@ def parse_args() -> argparse.Namespace:
     # =====================================================================
     #  Training Speedup Flags (Speedup Guide, Sections 1-10)
     # =====================================================================
-    parser.add_argument("--use_torch_compile", type=int, default=0,
+    parser.add_argument("--use_torch_compile", type=int, default=1,
                         help="1 = wrap the DAMPS spectral block in "
-                             "torch.compile (PyTorch >= 2.0). Reported "
-                             "+25-35%% speedup on the GNN forward path.")
+                             "torch.compile (PyTorch >= 2.0). Default ON "
+                             "for Branch A' speedups; gated by the Inductor "
+                             "complex-FFT backward probe. Reported "
+                             "+20-40%% training speedup with "
+                             "mode=reduce-overhead.")
     parser.add_argument("--torch_compile_mode", type=str, default="reduce-overhead",
                         help="torch.compile mode: {default, reduce-overhead, "
                              "max-autotune}. 'reduce-overhead' is best for "
                              "medium-sized models per the speedup guide.")
-    parser.add_argument("--torch_compile_dynamic", type=int, default=1,
-                        help="1 = compile with dynamic=True (required because "
-                             "the BPR triplet batch size can vary by 1 between "
-                             "epochs).")
+    parser.add_argument("--torch_compile_dynamic", type=int, default=0,
+                        help="1 = compile with dynamic=True. Default 0 so "
+                             "mode=reduce-overhead can use Inductor CUDA "
+                             "graphs (DAMPS inputs are fixed-shape). Set 1 "
+                             "only if you must tolerate shape changes.")
     parser.add_argument(
         "--use_gpu_sample",
         type=int,
@@ -451,6 +455,16 @@ def parse_args() -> argparse.Namespace:
         help="1 = sample BPR triplets on GPU (speedup guide Section C / "
              "GPU-side negative sampling; ~3-5x vs CPU on batch 1024). "
              "0 = legacy CPU rejection sampling in Data.sample().",
+    )
+    parser.add_argument(
+        "--use_cuda_graph",
+        type=int,
+        default=0,
+        help="1 = capture a persistent CUDAGraph of the train step "
+             "(requires fixed batch shapes; incompatible with "
+             "--torch_compile_dynamic 1 and with NRDMC-lite / SimGCL "
+             "view paths that rebuild sparse graphs every step). "
+             "Default 0; enable only for LogQ-only fixed-shape runs.",
     )
 
     # =====================================================================

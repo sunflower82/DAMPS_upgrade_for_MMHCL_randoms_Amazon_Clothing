@@ -514,7 +514,8 @@ class Trainer:
         # the full forward consumes the periodically-rebuilt ``Item_mat``
         # (sparse tensor with changing nnz), which would trigger expensive
         # recompilations. The DAMPS submodule has fixed input/output shapes
-        # so it is safe to compile with dynamic=True.
+        # so it is safe to compile with dynamic=False (enables Inductor
+        # CUDA graphs under mode=reduce-overhead).
         #
         # Gate on _INDUCTOR_COMPLEX_BACKWARD_OK: on PyTorch builds where
         # Inductor's backward compiler crashes on complex-FFT regions
@@ -522,6 +523,13 @@ class Trainer:
         # DAMPS would kill every training step at .backward(). The probe
         # detects that condition at startup and we skip the wrap to keep
         # DAMPS in eager mode (correct, just no compile speedup).
+        self._cuda_graph: torch.cuda.CUDAGraph | None = None
+        self._cuda_graph_static: dict[str, torch.Tensor] | None = None
+        self._cuda_graph_enabled: bool = False
+        self._cuda_graph_bsz: int = 0
+        self._cuda_graph_item_len: int = 0
+        self._last_eval_ua: torch.Tensor | None = None
+        self._last_eval_ia: torch.Tensor | None = None
         if bool(args.use_torch_compile) and hasattr(torch, "compile"):
             if not _get_inductor_complex_backward_ok():
                 self.logger.logging(
@@ -533,21 +541,62 @@ class Trainer:
                 )
             else:
                 try:
+                    # reduce-overhead + dynamic=False lets Inductor capture
+                    # CUDA graphs over the fixed-shape DAMPS region.
+                    _dyn = bool(args.torch_compile_dynamic)
+                    if (
+                        str(args.torch_compile_mode) == "reduce-overhead"
+                        and _dyn
+                    ):
+                        self.logger.logging(
+                            "[speedup] torch_compile_dynamic=1 with "
+                            "mode=reduce-overhead disables Inductor "
+                            "CUDA graphs; prefer --torch_compile_dynamic 0"
+                        )
                     self.model.damps = torch.compile(           # type: ignore[assignment]
                         self.model.damps,
                         mode=str(args.torch_compile_mode),
-                        dynamic=bool(args.torch_compile_dynamic),
+                        dynamic=_dyn,
                     )
                     self.logger.logging(
                         f"[speedup] torch.compile enabled on DAMPS submodule "
                         f"(mode={args.torch_compile_mode}, "
-                        f"dynamic={bool(args.torch_compile_dynamic)})"
+                        f"dynamic={_dyn})"
                     )
                 except Exception as exc:                        # pragma: no cover
                     self.logger.logging(
                         f"[speedup] torch.compile failed to attach: {exc}; "
                         f"continuing in eager mode."
                     )
+
+        # CUDAGraph for the full train step is only valid with strictly
+        # fixed batch shapes and no per-step sparse rebuilds (NRDMC/SimGCL).
+        _want_cg = bool(getattr(args, "use_cuda_graph", 0))
+        _view_on_cfg = bool(args.enable_simgcl) or bool(
+            getattr(args, "enable_nrdmc_lite", 0)
+        )
+        if _want_cg:
+            if self.device.type != "cuda":
+                self.logger.logging(
+                    "[speedup] --use_cuda_graph ignored (CUDA required)"
+                )
+            elif _view_on_cfg:
+                self.logger.logging(
+                    "[speedup] --use_cuda_graph skipped: NRDMC-lite / "
+                    "SimGCL rebuild sparse view graphs every step "
+                    "(incompatible with CUDAGraph capture)"
+                )
+            elif bool(args.torch_compile_dynamic):
+                self.logger.logging(
+                    "[speedup] --use_cuda_graph skipped: requires "
+                    "--torch_compile_dynamic 0 for fixed shapes"
+                )
+            else:
+                self._cuda_graph_enabled = True
+                self.logger.logging(
+                    "[speedup] CUDAGraph train-step capture armed "
+                    "(will capture after 3 warmup batches)"
+                )
 
         # ---------------- W&B (optional) ----------------
         self.wandb: Any = None
@@ -590,6 +639,13 @@ class Trainer:
         new_adj = self.knn_router.build_graph_from_modalities(h_img, h_txt, h_aud)
         new_adj = new_adj.to(self.device)
         self.Item_mat = new_adj
+        # Sparse adjacency change invalidates any captured CUDAGraph.
+        if self._cuda_graph is not None:
+            self.logger.logging(
+                "[speedup] CUDAGraph invalidated after K-NN rebuild"
+            )
+            self._cuda_graph = None
+            self._cuda_graph_static = None
 
         nnz = adj_nnz(new_adj)
         deg = adj_avg_degree(new_adj)
@@ -618,6 +674,9 @@ class Trainer:
             epoch=0,
             update_momentum=False,
         )
+        # Cache for main_tercile (avoids a second full forward for Head/Mid/Tail).
+        self._last_eval_ua = out["u_ui_emb"]
+        self._last_eval_ia = out["i_ui_emb"]
         return test_torch(out["u_ui_emb"], out["i_ui_emb"], users_to_test, is_val)
 
     # ------------------------------------------------------------------
@@ -638,6 +697,154 @@ class Trainer:
         mf = -F.logsigmoid(pos - neg).mean()
         emb = self.regs * regularizer
         return mf, emb, 0.0
+
+    def _pad_batch_items(
+        self,
+        batch_items: torch.Tensor,
+        target_len: int,
+    ) -> torch.Tensor:
+        """Pad / truncate ``batch_items`` to a fixed length for CUDAGraph."""
+        n = int(batch_items.numel())
+        if n == target_len:
+            return batch_items
+        if n > target_len:
+            return batch_items[:target_len]
+        # Repeat the first index (valid item) to fill — momentum write is
+        # idempotent for duplicates.
+        fill = batch_items[:1].expand(target_len - n)
+        return torch.cat([batch_items, fill], dim=0)
+
+    def _compute_batch_losses(
+        self,
+        users_t: torch.Tensor,
+        pos_t: torch.Tensor,
+        neg_t: torch.Tensor,
+        batch_items: torch.Tensor,
+        epoch: int,
+        *,
+        want_view_diag: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Forward + losses for one BPR mini-batch (shared by eager / CUDAGraph)."""
+        amp_dtype = torch.bfloat16 if self.use_amp else torch.float32
+        with torch.amp.autocast(
+            device_type=self.device.type,
+            dtype=amp_dtype,
+            enabled=self.use_amp,
+        ):
+            out = self.model(
+                self.UI_mat,
+                self.Item_mat,
+                self.User_mat,
+                item_indices=batch_items,
+                epoch=epoch,
+                update_momentum=True,
+            )
+            u_g = out["u_ui_emb"][users_t]
+            pos_g = out["i_ui_emb"][pos_t]
+            neg_g = out["i_ui_emb"][neg_t]
+            bmf, bemb, _ = self.bpr_loss(u_g, pos_g, neg_g)
+            bcl_item = self.model.batched_contrastive_loss(
+                out["i_ui_emb"], out["ii_emb"], apply_logq=True,
+            ) * args.item_loss_ratio
+            bcl_user = self.model.batched_contrastive_loss(
+                out["u_ui_emb"], out["uu_emb"], apply_logq=False,
+            ) * args.user_loss_ratio
+            bcl = bcl_item + bcl_user
+            _view_on = bool(args.enable_simgcl) or bool(
+                getattr(args, "enable_nrdmc_lite", 0)
+            )
+            if _view_on:
+                l_view = (
+                    self.model.simgcl_view_forward(
+                        epoch=epoch, return_diag=want_view_diag
+                    )
+                    * args.lambda_view
+                )
+            else:
+                l_view = torch.zeros((), device=bcl_item.device)
+            batch_total = bmf + bemb + bcl + l_view
+        return batch_total, bmf, bemb, bcl, l_view
+
+    def _try_cudagraph_capture(
+        self,
+        users_t: torch.Tensor,
+        pos_t: torch.Tensor,
+        neg_t: torch.Tensor,
+        batch_items: torch.Tensor,
+        epoch: int,
+    ) -> bool:
+        """Capture a CUDAGraph over the fixed-shape train step. Returns ok."""
+        assert self.device.type == "cuda"
+        bsz = int(users_t.numel())
+        item_len = int(batch_items.numel())
+        static: dict[str, torch.Tensor] = {
+            "users": users_t.clone(),
+            "pos": pos_t.clone(),
+            "neg": neg_t.clone(),
+            "items": batch_items.clone(),
+            "total": torch.zeros((), device=self.device),
+            "bmf": torch.zeros((), device=self.device),
+            "bemb": torch.zeros((), device=self.device),
+            "bcl": torch.zeros((), device=self.device),
+            "l_view": torch.zeros((), device=self.device),
+        }
+        # Warmup outside the graph (allocator, cuDNN, compile).
+        for _ in range(3):
+            self.optimizer.zero_grad(set_to_none=True)
+            total, bmf, bemb, bcl, l_view = self._compute_batch_losses(
+                static["users"],
+                static["pos"],
+                static["neg"],
+                static["items"],
+                epoch,
+            )
+            total.backward()
+            if args.clip_grad_norm > 0:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), max_norm=args.clip_grad_norm
+                )
+            self.optimizer.step()
+        torch.cuda.synchronize()
+
+        self.optimizer.zero_grad(set_to_none=True)
+        g = torch.cuda.CUDAGraph()
+        try:
+            with torch.cuda.graph(g):
+                total, bmf, bemb, bcl, l_view = self._compute_batch_losses(
+                    static["users"],
+                    static["pos"],
+                    static["neg"],
+                    static["items"],
+                    epoch,
+                )
+                total.backward()
+                if args.clip_grad_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), max_norm=args.clip_grad_norm
+                    )
+                self.optimizer.step()
+                static["total"].copy_(total.detach())
+                static["bmf"].copy_(bmf.detach())
+                static["bemb"].copy_(bemb.detach())
+                static["bcl"].copy_(bcl.detach())
+                static["l_view"].copy_(l_view.detach())
+        except Exception as exc:
+            self.logger.logging(
+                f"[speedup] CUDAGraph capture failed ({exc}); "
+                "falling back to eager train step"
+            )
+            self._cuda_graph_enabled = False
+            return False
+
+        self._cuda_graph = g
+        self._cuda_graph_static = static
+        self._cuda_graph_bsz = bsz
+        self._cuda_graph_item_len = item_len
+        self.logger.logging(
+            f"[speedup] CUDAGraph captured "
+            f"(bsz={bsz}, item_len={item_len})"
+        )
+        return True
 
     # ------------------------------------------------------------------
     #  Main training loop
@@ -719,8 +926,6 @@ class Trainer:
         best_model_state: Optional[dict[str, Any]] = None
         test_ret: Union[str, dict[str, Any]] = ""  # last test snapshot (for the run-summary line)
 
-        amp_dtype = torch.bfloat16 if self.use_amp else torch.float32
-
         for epoch in range(args.epoch):
             t0 = time()
 
@@ -739,8 +944,6 @@ class Trainer:
             _last_nrdmc_diag: dict[str, float] = {}
 
             for batch_idx in range(n_batch):
-                self.optimizer.zero_grad()
-
                 # Speedup guide Section C / F step 7 -- GPU BPR sampling
                 # (flag --use_gpu_sample; default on for CUDA).
                 if bool(getattr(args, "use_gpu_sample", 0)):
@@ -761,73 +964,156 @@ class Trainer:
 
                 # Items covered by this batch (for the Slim Momentum write)
                 batch_items = torch.cat([pos_t, neg_t]).unique()
+                _want_diag = (
+                    bool(getattr(args, "enable_nrdmc_lite", 0))
+                    and (batch_idx % _nrdmc_diag_every == 0)
+                )
 
-                with torch.amp.autocast(
-                    device_type=self.device.type,
-                    dtype=amp_dtype,
-                    enabled=self.use_amp,
-                ):
-                    out = self.model(
-                        self.UI_mat,
-                        self.Item_mat,
-                        self.User_mat,
-                        item_indices=batch_items,
-                        epoch=epoch,
-                        update_momentum=True,
+                # ---- Optional CUDAGraph replay (fixed-shape LogQ-only) ----
+                if self._cuda_graph_enabled and self.device.type == "cuda":
+                    fixed_item_len = 2 * self.batch_size
+                    batch_items = self._pad_batch_items(
+                        batch_items, fixed_item_len
                     )
-
-                    u_g = out["u_ui_emb"][users_t]
-                    pos_g = out["i_ui_emb"][pos_t]
-                    neg_g = out["i_ui_emb"][neg_t]
-
-                    bmf, bemb, _ = self.bpr_loss(u_g, pos_g, neg_g)
-
-                    bcl_item = self.model.batched_contrastive_loss(
-                        out["i_ui_emb"], out["ii_emb"], apply_logq=True,
-                    ) * args.item_loss_ratio
-                    bcl_user = self.model.batched_contrastive_loss(
-                        out["u_ui_emb"], out["uu_emb"], apply_logq=False,
-                    ) * args.user_loss_ratio
-                    bcl = bcl_item + bcl_user
-
-                    # Wave 2 / M1 -- SimGCL view-invariance term.
-                    # simgcl_view_forward() is a hard no-op when
-                    # args.enable_simgcl=0, preserving the Wave 1
-                    # LogQ-only baseline bit-for-bit.
-                    # rev55 §8.2 -- NRDMC-lite (Branch A') uses the same
-                    # hook but internally routes to learnable view generators.
-                    _view_on = bool(args.enable_simgcl) or bool(
-                        getattr(args, "enable_nrdmc_lite", 0)
-                    )
-                    if _view_on:
-                        _want_diag = (
-                            bool(getattr(args, "enable_nrdmc_lite", 0))
-                            and (batch_idx % _nrdmc_diag_every == 0)
-                        )
-                        l_view = (
-                            self.model.simgcl_view_forward(
-                                epoch=epoch, return_diag=_want_diag
+                    # Capture once after a few eager warmups.
+                    if self._cuda_graph is None:
+                        if batch_idx < 3:
+                            self.optimizer.zero_grad(set_to_none=True)
+                            (
+                                batch_total,
+                                bmf,
+                                bemb,
+                                bcl,
+                                l_view,
+                            ) = self._compute_batch_losses(
+                                users_t,
+                                pos_t,
+                                neg_t,
+                                batch_items,
+                                epoch,
+                                want_view_diag=_want_diag,
                             )
-                            * args.lambda_view
-                        )
-                        if _want_diag:
-                            _cached = getattr(
-                                self.model, "_last_nrdmc_diag", None
+                            batch_total.backward()
+                            if args.clip_grad_norm > 0:
+                                torch.nn.utils.clip_grad_norm_(
+                                    self.model.parameters(),
+                                    max_norm=args.clip_grad_norm,
+                                )
+                            self.optimizer.step()
+                        else:
+                            ok = self._try_cudagraph_capture(
+                                users_t, pos_t, neg_t, batch_items, epoch
                             )
-                            if isinstance(_cached, dict) and _cached:
-                                _last_nrdmc_diag = dict(_cached)
+                            if not ok:
+                                # Capture failed -- finish this batch eager.
+                                self.optimizer.zero_grad(set_to_none=True)
+                                (
+                                    batch_total,
+                                    bmf,
+                                    bemb,
+                                    bcl,
+                                    l_view,
+                                ) = self._compute_batch_losses(
+                                    users_t,
+                                    pos_t,
+                                    neg_t,
+                                    batch_items,
+                                    epoch,
+                                    want_view_diag=_want_diag,
+                                )
+                                batch_total.backward()
+                                if args.clip_grad_norm > 0:
+                                    torch.nn.utils.clip_grad_norm_(
+                                        self.model.parameters(),
+                                        max_norm=args.clip_grad_norm,
+                                    )
+                                self.optimizer.step()
+                            else:
+                                # Capture already ran one step; read statics.
+                                st = self._cuda_graph_static
+                                assert st is not None
+                                batch_total = st["total"]
+                                bmf = st["bmf"]
+                                bemb = st["bemb"]
+                                bcl = st["bcl"]
+                                l_view = st["l_view"]
                     else:
-                        l_view = torch.zeros((), device=bcl_item.device)
-
-                    batch_total = bmf + bemb + bcl + l_view
-
-                # Backward (works with bfloat16 AMP — no GradScaler needed)
-                batch_total.backward()
-                if args.clip_grad_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), max_norm=args.clip_grad_norm
+                        st = self._cuda_graph_static
+                        assert st is not None and self._cuda_graph is not None
+                        if (
+                            users_t.numel() != self._cuda_graph_bsz
+                            or batch_items.numel() != self._cuda_graph_item_len
+                        ):
+                            # Shape drift -- disable graphs for the rest.
+                            self.logger.logging(
+                                "[speedup] CUDAGraph disabled: batch shape "
+                                "changed mid-run"
+                            )
+                            self._cuda_graph_enabled = False
+                            self._cuda_graph = None
+                            self.optimizer.zero_grad(set_to_none=True)
+                            (
+                                batch_total,
+                                bmf,
+                                bemb,
+                                bcl,
+                                l_view,
+                            ) = self._compute_batch_losses(
+                                users_t,
+                                pos_t,
+                                neg_t,
+                                batch_items,
+                                epoch,
+                                want_view_diag=_want_diag,
+                            )
+                            batch_total.backward()
+                            if args.clip_grad_norm > 0:
+                                torch.nn.utils.clip_grad_norm_(
+                                    self.model.parameters(),
+                                    max_norm=args.clip_grad_norm,
+                                )
+                            self.optimizer.step()
+                        else:
+                            st["users"].copy_(users_t)
+                            st["pos"].copy_(pos_t)
+                            st["neg"].copy_(neg_t)
+                            st["items"].copy_(batch_items)
+                            self._cuda_graph.replay()
+                            batch_total = st["total"]
+                            bmf = st["bmf"]
+                            bemb = st["bemb"]
+                            bcl = st["bcl"]
+                            l_view = st["l_view"]
+                else:
+                    # ---- Eager train step (default / NRDMC / SimGCL) ----
+                    self.optimizer.zero_grad(set_to_none=True)
+                    (
+                        batch_total,
+                        bmf,
+                        bemb,
+                        bcl,
+                        l_view,
+                    ) = self._compute_batch_losses(
+                        users_t,
+                        pos_t,
+                        neg_t,
+                        batch_items,
+                        epoch,
+                        want_view_diag=_want_diag,
                     )
-                self.optimizer.step()
+                    if _want_diag:
+                        _cached = getattr(
+                            self.model, "_last_nrdmc_diag", None
+                        )
+                        if isinstance(_cached, dict) and _cached:
+                            _last_nrdmc_diag = dict(_cached)
+                    batch_total.backward()
+                    if args.clip_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(),
+                            max_norm=args.clip_grad_norm,
+                        )
+                    self.optimizer.step()
 
                 loss += float(batch_total)
                 mf_loss += float(bmf)
