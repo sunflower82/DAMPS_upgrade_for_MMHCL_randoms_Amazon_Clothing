@@ -763,7 +763,12 @@ class DAMPS_MMHCL(nn.Module):
     # ------------------------------------------------------------------
     #  SimGCL view-invariance forward (Wave 2 / M1)
     # ------------------------------------------------------------------
-    def simgcl_view_forward(self, epoch: int = 0) -> torch.Tensor:
+    def simgcl_view_forward(
+        self,
+        epoch: int = 0,
+        *,
+        return_diag: bool = False,
+    ) -> torch.Tensor:
         """Compute L_SimGCL = 0.5 * (L_user + L_item) with view-cache reuse.
 
         Branch A (rev55 §8.1) augments the rev54 helper with batch-N InfoNCE
@@ -771,6 +776,9 @@ class DAMPS_MMHCL(nn.Module):
 
         Args:
             epoch: Current training epoch index, supplied by train.py.
+            return_diag: If True (NRDMC-lite only), also cache PTV/SAV/IAV
+                scalar diagnostics on ``self._last_nrdmc_diag``. Default
+                False avoids per-step CUDA syncs (P3 perf guide).
 
         Returns:
             Scalar loss tensor with gradient flow into ego embeddings.
@@ -794,7 +802,7 @@ class DAMPS_MMHCL(nn.Module):
                 raise RuntimeError(
                     "nrdmc_lite view called before forward() cached _ui_mat."
                 )
-            return compute_nrdmc_view_loss(
+            out = compute_nrdmc_view_loss(
                 view_module=self.nrdmc_lite_view,
                 e_u_hat=u_hat,
                 e_i_hat=i_hat,
@@ -803,7 +811,13 @@ class DAMPS_MMHCL(nn.Module):
                 ui_mat=self._ui_mat,
                 tau=self.tau,
                 batch_size=self.branchA_view_bsz,
+                return_diag=return_diag,
             )
+            if return_diag:
+                loss_t, diag = out  # type: ignore[misc]
+                self._last_nrdmc_diag = diag
+                return loss_t
+            return out  # type: ignore[return-value]
 
         if not self.enable_simgcl:
             return torch.zeros(

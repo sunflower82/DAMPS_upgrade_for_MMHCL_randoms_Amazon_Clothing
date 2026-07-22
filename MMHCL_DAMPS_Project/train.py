@@ -686,8 +686,11 @@ class Trainer:
             emb_loss = 0.0
             cl_loss = 0.0
             view_loss = 0.0
+            # P3 perf: NRDMC diag scalars only every N batches (cuts CUDA syncs).
+            _nrdmc_diag_every = 50
+            _last_nrdmc_diag: dict[str, float] = {}
 
-            for _ in range(n_batch):
+            for batch_idx in range(n_batch):
                 self.optimizer.zero_grad()
 
                 users_list, pos_list, neg_list = data_generator.sample()
@@ -736,10 +739,22 @@ class Trainer:
                         getattr(args, "enable_nrdmc_lite", 0)
                     )
                     if _view_on:
+                        _want_diag = (
+                            bool(getattr(args, "enable_nrdmc_lite", 0))
+                            and (batch_idx % _nrdmc_diag_every == 0)
+                        )
                         l_view = (
-                            self.model.simgcl_view_forward(epoch=epoch)
+                            self.model.simgcl_view_forward(
+                                epoch=epoch, return_diag=_want_diag
+                            )
                             * args.lambda_view
                         )
+                        if _want_diag:
+                            _cached = getattr(
+                                self.model, "_last_nrdmc_diag", None
+                            )
+                            if isinstance(_cached, dict) and _cached:
+                                _last_nrdmc_diag = dict(_cached)
                     else:
                         l_view = torch.zeros((), device=bcl_item.device)
 
@@ -799,7 +814,7 @@ class Trainer:
 
             # ---------------- W&B per-epoch ----------------
             if self.wandb is not None:
-                self.wandb.log({
+                _wb_payload: dict[str, Any] = {
                     "epoch": epoch,
                     "train/loss": loss,
                     "train/mf_loss": mf_loss,
@@ -817,7 +832,10 @@ class Trainer:
                     "diag/tanh_sat_img": diag["tanh_sat_img"],
                     "diag/tanh_sat_txt": diag["tanh_sat_txt"],
                     "diag/baseline_asc": diag["baseline_asc"],
-                })
+                }
+                for _k, _v in _last_nrdmc_diag.items():
+                    _wb_payload[f"nrdmc/{_k}"] = _v
+                self.wandb.log(_wb_payload)
 
             # ---------------- Skip evaluation on non-eval epochs ----------------
             if (epoch + 1) % args.verbose != 0:
