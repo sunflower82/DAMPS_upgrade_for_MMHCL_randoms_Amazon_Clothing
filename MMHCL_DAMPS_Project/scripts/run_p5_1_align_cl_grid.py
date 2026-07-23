@@ -107,7 +107,11 @@ BASE_PRESETS: dict[str, dict[str, int]] = {
     "p5a_tau":        {"damps_apc": 0, "learnable_tau": 1},
     "p5a_apc_tau":    {"damps_apc": 1, "learnable_tau": 1},
 }
-DEFAULT_BASE = "p5a_apc_tau"   # optimistic: P5.0 winner; over-ridable via CLI.
+# rev58a: P5.0 verdict flipped the earlier assumption -- all APC / learnable-tau
+# cells regressed below the flag-off baseline (see analysis doc Sec. 8). We
+# therefore layer P5.1 on p5_baseline_p4 by default, matching the actual P5.0
+# winner. Over-ridable via --base_from_p5_0 for future re-tests.
+DEFAULT_BASE = "p5_baseline_p4"
 
 _TER_TEST_RX = re.compile(
     r"\[tercile-test-final\]\s+BEST_Test_Recall@20_Head=(?P<h>[-\d.eE+nan]+)"
