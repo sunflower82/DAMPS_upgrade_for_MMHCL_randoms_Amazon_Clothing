@@ -51,6 +51,7 @@ contrastive loss — is identical to the original MMHCL.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Callable, Optional
 
 import torch
@@ -204,6 +205,13 @@ class DAMPS_MMHCL(nn.Module):
         enable_ptv: bool = False,
         n_prototypes: int = 32,
         lambda_ptv: float = 1.0,
+        # ---- Branch A' / P4 (rev57) -- ASC gate reparameterization ----
+        # ``asc_gate_mode``: {"raw", "sigmoid", "tanh_signed", "tanh01"}.
+        # "raw" reproduces the original rev55/rev56 behaviour (alpha = theta,
+        # unconstrained). The other modes constrain the effective gate and
+        # are the P4 fix for the alpha_img collapse observed in the P3 PTV
+        # sweep logs (alpha_img: +0.09 -> -0.68 across 75 epochs).
+        asc_gate_mode: str = "raw",
     ) -> None:
         super().__init__()
 
@@ -361,9 +369,52 @@ class DAMPS_MMHCL(nn.Module):
         # ------------------------------------------------------------------
         # 7. Soft Residual-Routing (eq. 3 of the spec)
         # ------------------------------------------------------------------
-        self.alpha_img = nn.Parameter(torch.tensor(0.1))
-        self.alpha_txt = nn.Parameter(torch.tensor(0.1))
-        self.alpha_aud = nn.Parameter(torch.tensor(0.1))
+        # rev57 / P4 -- ASC gate reparameterization.
+        #
+        # The scalar residual gate ``alpha_v`` (v in {img, txt, aud}) was
+        # originally a raw ``nn.Parameter(torch.tensor(0.1))`` used directly
+        # in ``h_raw + alpha * ln(h_cal)`` (see ``_soft_route``). Diagnostic
+        # logs from the P3 PTV sweep (2 seeds x 100 epochs, Amazon Clothing)
+        # show alpha_img drifting from +0.09 (epoch 0) to -0.68 (epoch 75),
+        # meaning the model learned to *subtract* the image branch. That
+        # collapses multimodal fusion well before the val-recall peak.
+        #
+        # rev57 P4 introduces four ``asc_gate_mode`` variants; the raw one is
+        # the identity function so the flag is fully backward-compatible.
+        # ``theta`` is the underlying ``nn.Parameter`` and ``alpha`` denotes
+        # the *effective* gate consumed by ``_soft_route``.
+        #
+        #   "raw"          alpha = theta                  in (-inf, +inf)
+        #   "sigmoid"      alpha = sigmoid(theta)         in (0, 1)
+        #   "tanh_signed"  alpha = tanh(theta)            in (-1, 1)
+        #   "tanh01"       alpha = 0.5*(tanh(theta)+1)    in (0, 1)
+        #
+        # ``theta`` is initialised so that ``alpha(theta_init) == 0.1`` in
+        # every mode -- so the very first forward pass reproduces the rev55
+        # residual-routing magnitude regardless of mode.
+        self.asc_gate_mode: str = str(asc_gate_mode).lower()
+        _valid_modes = {"raw", "sigmoid", "tanh_signed", "tanh01"}
+        if self.asc_gate_mode not in _valid_modes:
+            raise ValueError(
+                f"asc_gate_mode={asc_gate_mode!r} not in {sorted(_valid_modes)}"
+            )
+        _target_alpha_init: float = 0.1
+        if self.asc_gate_mode == "raw":
+            _theta_init = _target_alpha_init
+        elif self.asc_gate_mode == "sigmoid":
+            # sigmoid(theta_init) == 0.1  =>  theta_init = logit(0.1)
+            _theta_init = math.log(
+                _target_alpha_init / (1.0 - _target_alpha_init)
+            )
+        elif self.asc_gate_mode == "tanh_signed":
+            # tanh(theta_init) == 0.1
+            _theta_init = math.atanh(_target_alpha_init)
+        else:  # "tanh01"
+            # 0.5*(tanh(theta_init)+1) == 0.1  =>  tanh(theta_init) == -0.8
+            _theta_init = math.atanh(2.0 * _target_alpha_init - 1.0)
+        self.alpha_img = nn.Parameter(torch.tensor(float(_theta_init)))
+        self.alpha_txt = nn.Parameter(torch.tensor(float(_theta_init)))
+        self.alpha_aud = nn.Parameter(torch.tensor(float(_theta_init)))
         self.ln_img = nn.LayerNorm(embedding_dim)
         self.ln_txt = nn.LayerNorm(embedding_dim)
         self.ln_aud = nn.LayerNorm(embedding_dim) if self.has_audio else None
@@ -546,6 +597,21 @@ class DAMPS_MMHCL(nn.Module):
     # ------------------------------------------------------------------
     #  Soft Residual-Routing (eq. 3 of the spec)
     # ------------------------------------------------------------------
+    def _alpha_effective(self, theta: torch.Tensor) -> torch.Tensor:
+        """Map raw ``theta`` (``nn.Parameter``) to the effective gate value.
+
+        rev57 P4 -- see ``__init__`` doc-block for the four modes.
+        "raw" is the identity (backward-compat with rev55/rev56).
+        """
+        mode = self.asc_gate_mode
+        if mode == "sigmoid":
+            return torch.sigmoid(theta)
+        if mode == "tanh_signed":
+            return torch.tanh(theta)
+        if mode == "tanh01":
+            return 0.5 * (torch.tanh(theta) + 1.0)
+        return theta  # "raw"
+
     def _soft_route(
         self,
         h_raw: torch.Tensor,
@@ -555,7 +621,8 @@ class DAMPS_MMHCL(nn.Module):
     ) -> torch.Tensor:
         if not self.ablations["soft_routing"]:
             return h_cal
-        return h_raw + alpha * ln(h_cal)
+        alpha_eff = self._alpha_effective(alpha)
+        return h_raw + alpha_eff * ln(h_cal)
 
     # ------------------------------------------------------------------
     #  Forward pass
@@ -1018,9 +1085,21 @@ class DAMPS_MMHCL(nn.Module):
             "tau": float(self.tau.item()),
             "tau_clamped": float(torch.clamp(self.tau, min=0.01).item()),
             "tau_mode": "learnable" if self.learnable_tau else "static",
-            "alpha_img": float(self.alpha_img.item()),
-            "alpha_txt": float(self.alpha_txt.item()),
-            "alpha_aud": float(self.alpha_aud.item()) if self.has_audio else None,
+            # rev57 P4: report *effective* alpha (post-transform) so the
+            # train.py diagnostic log traces the value the model is actually
+            # multiplying by, plus the raw theta for reproducibility.
+            "alpha_img": float(self._alpha_effective(self.alpha_img).item()),
+            "alpha_txt": float(self._alpha_effective(self.alpha_txt).item()),
+            "alpha_aud": (
+                float(self._alpha_effective(self.alpha_aud).item())
+                if self.has_audio else None
+            ),
+            "alpha_img_theta": float(self.alpha_img.item()),
+            "alpha_txt_theta": float(self.alpha_txt.item()),
+            "alpha_aud_theta": (
+                float(self.alpha_aud.item()) if self.has_audio else None
+            ),
+            "asc_gate_mode": self.asc_gate_mode,
             "tanh_sat_img": sat["img"],
             "tanh_sat_txt": sat["txt"],
             "tanh_sat_aud": sat["aud"] if self.has_audio else None,

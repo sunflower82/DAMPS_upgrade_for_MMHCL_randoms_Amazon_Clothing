@@ -468,6 +468,53 @@ def parse_args() -> argparse.Namespace:
     )
 
     # =====================================================================
+    #  rev57 / P4 -- ASC gate reparameterization (fix alpha_img collapse)
+    # =====================================================================
+    # Diagnostic logs from the P3 PTV sweep show alpha_img drifting from
+    # +0.09 (ep 0) to -0.68 (ep 75) -- the model learns to subtract the
+    # image branch, collapsing multimodal fusion. These flags introduce
+    # three complementary knobs to guard against the collapse. All default
+    # to a no-op so pre-P4 runs reproduce exactly.
+    parser.add_argument(
+        "--asc_gate_mode", type=str, default="raw",
+        choices=["raw", "sigmoid", "tanh_signed", "tanh01"],
+        help=(
+            "Reparameterization of the Soft-Routing residual gate alpha_v "
+            "(v in {img, txt, aud}). 'raw' (default) reproduces rev55/rev56 "
+            "exactly (alpha = theta, unconstrained). 'sigmoid' constrains "
+            "alpha in (0, 1); 'tanh_signed' constrains alpha in (-1, 1); "
+            "'tanh01' constrains alpha in (0, 1). In every non-raw mode the "
+            "underlying theta is initialised so that alpha == 0.1 at step 0."
+        ),
+    )
+    parser.add_argument(
+        "--asc_warmup_epochs", type=int, default=0,
+        help=(
+            "Freeze alpha_img / alpha_txt / alpha_aud at their init value "
+            "for the first N epochs (requires_grad=False, so their .grad "
+            "stays None). After epoch N the gates are unfrozen and can "
+            "train. Default 0 = no freeze (rev55/rev56 behaviour)."
+        ),
+    )
+    parser.add_argument(
+        "--asc_reg_l2", type=float, default=0.0,
+        help=(
+            "Coefficient for the ASC gate L2 pull-to-target regularizer "
+            "L_reg = asc_reg_l2 * sum_v (alpha_v_eff - asc_reg_target)^2 "
+            "added to the training loss. Default 0.0 = disabled. "
+            "Suggested starting point: 0.01 (per-batch, per-modality)."
+        ),
+    )
+    parser.add_argument(
+        "--asc_reg_target", type=float, default=0.3,
+        help=(
+            "Target value that asc_reg_l2 pulls the effective gate toward. "
+            "0.3 mirrors the empirical mid-range that the raw gate transits "
+            "before drifting negative in the P3 logs."
+        ),
+    )
+
+    # =====================================================================
     #  Ablation Tag
     # =====================================================================
     parser.add_argument("--ablation_target", type=str, default="",

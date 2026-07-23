@@ -418,6 +418,8 @@ class Trainer:
             enable_ptv=bool(getattr(args, "enable_ptv", 0)),
             n_prototypes=int(getattr(args, "n_prototypes", 32)),
             lambda_ptv=float(getattr(args, "lambda_ptv", 1.0)),
+            # ---- Branch A' / P4 (rev57) ASC gate reparameterization ----
+            asc_gate_mode=str(getattr(args, "asc_gate_mode", "raw")),
         ).to(self.device)
         self.model.set_meta_categories(
             data_generator.meta_categories.to(self.device)
@@ -776,7 +778,25 @@ class Trainer:
                 )
             else:
                 l_view = torch.zeros((), device=bcl_item.device)
-            batch_total = bmf + bemb + bcl + l_view
+            # ---- rev57 P4: ASC gate L2 pull-to-target regularizer ----
+            # Only activates when asc_reg_l2 > 0 and we are past the warmup
+            # window (the gates would be frozen so the reg term is 0-grad).
+            _asc_reg_active = (
+                getattr(self, "_asc_reg_l2", 0.0) > 0.0
+                and epoch >= getattr(self, "_asc_warmup_epochs", 0)
+            )
+            if _asc_reg_active:
+                _target = float(getattr(self, "_asc_reg_target", 0.3))
+                _a_img = self.model._alpha_effective(self.model.alpha_img)
+                _a_txt = self.model._alpha_effective(self.model.alpha_txt)
+                _reg = (_a_img - _target).pow(2) + (_a_txt - _target).pow(2)
+                if self.model.has_audio:
+                    _a_aud = self.model._alpha_effective(self.model.alpha_aud)
+                    _reg = _reg + (_a_aud - _target).pow(2)
+                _l_asc_reg = float(self._asc_reg_l2) * _reg
+            else:
+                _l_asc_reg = torch.zeros((), device=bcl_item.device)
+            batch_total = bmf + bemb + bcl + l_view + _l_asc_reg
         return batch_total, bmf, bemb, bcl, l_view
 
     def _try_cudagraph_capture(
@@ -959,8 +979,50 @@ class Trainer:
         best_model_state: Optional[dict[str, Any]] = None
         test_ret: Union[str, dict[str, Any]] = ""  # last test snapshot (for the run-summary line)
 
+        # ------------------------------------------------------------------
+        # rev57 P4 -- ASC warmup / reg config (pull from args once).
+        # ------------------------------------------------------------------
+        _asc_warmup_epochs: int = int(getattr(args, "asc_warmup_epochs", 0))
+        _asc_reg_l2: float = float(getattr(args, "asc_reg_l2", 0.0))
+        _asc_reg_target: float = float(getattr(args, "asc_reg_target", 0.3))
+        _asc_gate_mode: str = str(getattr(args, "asc_gate_mode", "raw"))
+        # Store on self so ``_compute_batch_losses`` can inject the reg term.
+        self._asc_reg_l2 = _asc_reg_l2
+        self._asc_reg_target = _asc_reg_target
+        self._asc_warmup_epochs = _asc_warmup_epochs
+        self._asc_current_epoch: int = 0
+        self._asc_frozen: bool = False
+        if _asc_warmup_epochs > 0 or _asc_reg_l2 > 0.0 or _asc_gate_mode != "raw":
+            self.logger.logging(
+                f"[P4] asc_gate_mode={_asc_gate_mode}  "
+                f"warmup_epochs={_asc_warmup_epochs}  "
+                f"reg_l2={_asc_reg_l2}  reg_target={_asc_reg_target}"
+            )
+
         for epoch in range(args.epoch):
             t0 = time()
+
+            # ---------------- rev57 P4: ASC warmup gate ----------------
+            # Freeze alpha_img / alpha_txt / alpha_aud for the first
+            # ``asc_warmup_epochs`` epochs; unfreeze afterwards. Toggling
+            # requires_grad in place is safe because the optimizer already
+            # holds references and simply skips params without grads.
+            self._asc_current_epoch = int(epoch)
+            _should_freeze = (epoch < self._asc_warmup_epochs)
+            if _should_freeze != self._asc_frozen:
+                for _p in (
+                    self.model.alpha_img,
+                    self.model.alpha_txt,
+                    self.model.alpha_aud,
+                ):
+                    if _p is not None:
+                        _p.requires_grad_(not _should_freeze)
+                self._asc_frozen = _should_freeze
+                self.logger.logging(
+                    f"[P4] epoch {epoch}: ASC gates "
+                    f"{'frozen' if _should_freeze else 'unfrozen'} "
+                    f"(warmup_epochs={self._asc_warmup_epochs})."
+                )
 
             # ---------------- Pattern B' rebuild ----------------
             self.maybe_rebuild_hypergraph(epoch)
@@ -1188,6 +1250,9 @@ class Trainer:
                     f"({diag['tau_mode']})  "
                     f"alpha_img={diag['alpha_img']:.4f} "
                     f"alpha_txt={diag['alpha_txt']:.4f}  "
+                    f"(theta_img={diag.get('alpha_img_theta', float('nan')):.4f} "
+                    f"theta_txt={diag.get('alpha_txt_theta', float('nan')):.4f} "
+                    f"mode={diag.get('asc_gate_mode', 'raw')})  "
                     f"tanh_sat: img={diag['tanh_sat_img']:.3f} "
                     f"txt={diag['tanh_sat_txt']:.3f}  "
                     f"baseline_asc={diag['baseline_asc']:.4f}"
@@ -1210,6 +1275,10 @@ class Trainer:
                     "diag/tau_learnable": float(diag["tau_mode"] == "learnable"),
                     "diag/alpha_img": diag["alpha_img"],
                     "diag/alpha_txt": diag["alpha_txt"],
+                    # rev57 P4 -- raw theta + gate mode for post-hoc analysis.
+                    "diag/alpha_img_theta": diag.get("alpha_img_theta", float("nan")),
+                    "diag/alpha_txt_theta": diag.get("alpha_txt_theta", float("nan")),
+                    "diag/asc_frozen": float(self._asc_frozen),
                     "diag/tanh_sat_img": diag["tanh_sat_img"],
                     "diag/tanh_sat_txt": diag["tanh_sat_txt"],
                     "diag/baseline_asc": diag["baseline_asc"],
