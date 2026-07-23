@@ -794,6 +794,19 @@ class Trainer:
                 out["u_ui_emb"], out["uu_emb"], apply_logq=False,
             ) * args.user_loss_ratio
             bcl = bcl_item + bcl_user
+            # ---- rev58 P5.1: cross-modal alignment loss (Eq. 21) --------
+            # Folded into ``bcl`` (i) to keep the _compute_batch_losses
+            # return signature stable for the CUDAGraph capture path, and
+            # (ii) because L_align is a contrastive-family loss so its
+            # magnitude is comparable to bcl_item/bcl_user. Wall-time
+            # neutrality when lambda_align == 0 (skip the forward call).
+            _lambda_align = float(getattr(args, "lambda_align", 0.0))
+            _enable_align = bool(getattr(args, "enable_align", 0))
+            if _enable_align and _lambda_align > 0.0:
+                _tau0_align = float(getattr(args, "align_temperature", 0.2))
+                bcl = bcl + _lambda_align * self.model.align_loss_forward(
+                    item_indices=batch_items, tau0=_tau0_align,
+                )
             _view_on = bool(args.enable_simgcl) or bool(
                 getattr(args, "enable_nrdmc_lite", 0)
             )

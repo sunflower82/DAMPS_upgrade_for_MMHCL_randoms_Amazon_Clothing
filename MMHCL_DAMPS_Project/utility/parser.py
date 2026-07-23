@@ -407,6 +407,39 @@ def parse_args() -> argparse.Namespace:
     )
 
     # =====================================================================
+    #  Branch A' -- P5.1 (rev58) Cross-modal alignment loss L_align
+    #  Implements NRDMC IPM 2026 Section 5.4.1 Eq. 21 as a separate loss
+    #  term. Prior revs (rev55-57) only exposed L_mv (multi-view CL); the
+    #  paper's L_align (item text<->image InfoNCE) was missing. Enabling
+    #  L_align injects a fresh, non-saturated gradient into the raw
+    #  modality projections, addressing the frozen-cl / dormant-CL
+    #  diagnostic recorded in P4 (see analysis doc Section 7).
+    # =====================================================================
+    parser.add_argument(
+        "--enable_align", type=int, default=0,
+        help="1 = enable the cross-modal alignment loss L_align "
+             "(NRDMC IPM 2026 Eq. 21). Symmetric item-side InfoNCE "
+             "between raw projected image and text embeddings, added "
+             "to the total loss with weight --lambda_align. Requires "
+             "both image_feats and text_feats to be present.",
+    )
+    parser.add_argument(
+        "--lambda_align", type=float, default=0.0,
+        help="Weight of the cross-modal alignment loss L_align in the "
+             "total objective (Eq. 25). NRDMC paper uses values in "
+             "{0.001, 0.01, 0.1, 1.0}; P5.1 pilot defaults to 0.1. "
+             "lambda_align=0 turns the loss into a zero tensor "
+             "(also skips its forward pass for wall-time neutrality).",
+    )
+    parser.add_argument(
+        "--align_temperature", type=float, default=0.2,
+        help="Temperature tau_0 for the L_align InfoNCE softmax "
+             "(NRDMC IPM 2026 Eq. 21). Paper reports tau_0=0.2 as the "
+             "Clothing sweet spot; must be > 0.01 (clamped at read "
+             "time to avoid exp overflow).",
+    )
+
+    # =====================================================================
     #  Pattern B' (Scheduled Rebuild)
     # =====================================================================
     parser.add_argument("--rebuild_R", type=int, default=5,

@@ -944,6 +944,67 @@ class DAMPS_MMHCL(nn.Module):
         return loss
 
     # ------------------------------------------------------------------
+    #  P5.1 (rev58) — Cross-modal Alignment Loss L_align
+    #  NRDMC IPM 2026 Section 5.4.1 Eq. 21 (item-side, symmetric).
+    # ------------------------------------------------------------------
+    def align_loss_forward(
+        self,
+        item_indices: torch.Tensor | None = None,
+        tau0: float = 0.2,
+    ) -> torch.Tensor:
+        """Symmetric item-side cross-modal InfoNCE (L_align, Eq. 21).
+
+        Aligns the raw projected image and text embeddings of each item
+        in the current BPR mini-batch. Positives are the diagonal of
+        ``sim(h_v[B], h_t[B])`` and negatives are all other items in
+        the same batch.
+
+        Args:
+            item_indices : (B,) LongTensor of item ids for the current
+                           mini-batch. If ``None``, the full item set is
+                           used (only recommended for very small n_items;
+                           full-batch is O(n_items^2) memory).
+            tau0         : InfoNCE temperature; clamped at 0.01 to avoid
+                           exp overflow. Paper default: 0.2 on Clothing.
+
+        Returns:
+            scalar 0-d tensor (fp32). Zero-tensor short-circuit is
+            handled by the caller (train.py) when lambda_align == 0.
+
+        Notes:
+            * Runs in fp32 with autocast disabled so cross-modal
+              gradients are not clipped by bf16 rounding.
+            * Uses the *same* ``image_proj`` / ``text_proj`` layers as
+              the main forward pass, so L_align directly steers the
+              raw modality projections (which is exactly the pathway
+              the frozen-cl diagnostic in P4 flagged as dormant).
+        """
+        device = self.raw_image.device
+        if item_indices is None:
+            v_feat = self.raw_image
+            t_feat = self.raw_text
+        else:
+            v_feat = self.raw_image[item_indices]
+            t_feat = self.raw_text[item_indices]
+        # Force fp32 for numerical stability; L_align is a pure loss term
+        # (never enters the CUDAGraph capture in P5.1) so extra fp32 work
+        # is a per-batch O(B^2) hit that is negligible at B=1024.
+        with torch.amp.autocast(device_type=device.type, enabled=False):
+            h_v = self.image_proj(v_feat.float())
+            h_t = self.text_proj(t_feat.float())
+            h_v = F.normalize(h_v, p=2, dim=1)
+            h_t = F.normalize(h_t, p=2, dim=1)
+            tau0_eff = max(float(tau0), 0.01)
+            logits_t2v = (h_t @ h_v.transpose(0, 1)) / tau0_eff
+            logits_v2t = (h_v @ h_t.transpose(0, 1)) / tau0_eff
+            n = h_v.size(0)
+            labels = torch.arange(n, device=h_v.device)
+            l_t2v = F.cross_entropy(logits_t2v, labels)
+            l_v2t = F.cross_entropy(logits_v2t, labels)
+            l_align = 0.5 * (l_t2v + l_v2t)
+        return l_align
+
+    # ------------------------------------------------------------------
     #  Contrastive Loss (Learnable τ — Section 3.1 of the spec)
     # ------------------------------------------------------------------
     def batched_contrastive_loss(
