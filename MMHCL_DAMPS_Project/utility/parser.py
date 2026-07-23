@@ -440,6 +440,48 @@ def parse_args() -> argparse.Namespace:
     )
 
     # =====================================================================
+    #  P6.0 -- MACP (Multi-Aspect Content Preprocessing, TAMER MM'25)
+    #
+    #  Offline text-only whitening. Two pre-computed streams
+    #    ``text_feat_pca_ica.npy`` (PCA->ICA rotation)
+    #    ``text_feat_zca.npy``     (ZCA whitening)
+    #  live next to ``text_feat.npy`` and are produced by
+    #  ``scripts/preprocess_macp.py``. Flags below decide how (or
+    #  whether) to inject them into ``text_feats`` at load time. Image
+    #  features are deliberately left raw -- P5.0 confirmed the model
+    #  adaptively drives alpha_img to negative values on Clothing.
+    # =====================================================================
+    parser.add_argument(
+        "--use_macp", type=int, default=0,
+        help="1 = enable MACP text whitening (P6.0). "
+             "0 (default) = leave text_feats untouched, matches the "
+             "P5.1 baseline bit-for-bit.",
+    )
+    parser.add_argument(
+        "--macp_mode", type=str, default="residual",
+        choices=("raw", "replace_pca", "replace_zca", "residual"),
+        help="How to combine the raw and whitened text streams. "
+             "'raw' short-circuits to no-op (equivalent to --use_macp 0). "
+             "'replace_*' swaps text_feats with the corresponding "
+             "stream. 'residual' (default) adds a scaled auxiliary "
+             "signal on top of the raw features -- safest option.",
+    )
+    parser.add_argument(
+        "--macp_alpha_p", type=float, default=0.10,
+        help="Residual weight for the PCA->ICA stream in "
+             "'residual' mode. Tuned in {0.05, 0.10, 0.20} for the "
+             "P6.0 grid.",
+    )
+    parser.add_argument(
+        "--macp_alpha_z", type=float, default=0.10,
+        help="Residual weight for the ZCA stream in 'residual' mode.",
+    )
+    parser.add_argument(
+        "--macp_verbose", type=int, default=1,
+        help="1 = print one-line MACP diagnostic during load.",
+    )
+
+    # =====================================================================
     #  Pattern B' (Scheduled Rebuild)
     # =====================================================================
     parser.add_argument("--rebuild_R", type=int, default=5,

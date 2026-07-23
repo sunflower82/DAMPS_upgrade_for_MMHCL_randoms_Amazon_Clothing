@@ -165,7 +165,28 @@ class Data:
         # 4. Load raw modality features (used by DAMPS + cached I2I builds)
         # ------------------------------------------------------------------
         self.image_feats: Optional[torch.Tensor] = self._load_modality("image")
-        self.text_feats: Optional[torch.Tensor] = self._load_modality("text")
+        text_raw = self._load_modality("text")
+        # ------------------------------------------------------------------
+        # P6.0 -- MACP text-only whitening. When --use_macp 0 (default),
+        # ``fuse_text(mode='raw')`` is a strict no-op. Non-zero triggers
+        # residual injection or full replacement from the two streams
+        # produced by ``scripts/preprocess_macp.py``. Image features are
+        # deliberately untouched: P5.0 confirmed alpha_img<0 is the
+        # model's correct response to noisy Clothing image embeddings.
+        # ------------------------------------------------------------------
+        if bool(int(getattr(args, "use_macp", 0))) and text_raw is not None:
+            from damps.macp import MacpConfig, fuse_text
+            dataset_dir = os.path.join(args.data_path, args.dataset)
+            macp_cfg = MacpConfig(
+                mode=getattr(args, "macp_mode", "residual"),
+                alpha_p=float(getattr(args, "macp_alpha_p", 0.10)),
+                alpha_z=float(getattr(args, "macp_alpha_z", 0.10)),
+            )
+            text_raw, self._macp_diag = fuse_text(
+                text_raw, dataset_dir=dataset_dir, cfg=macp_cfg,
+                verbose=bool(int(getattr(args, "macp_verbose", 1))),
+            )
+        self.text_feats: Optional[torch.Tensor] = text_raw
         self.audio_feats: Optional[torch.Tensor] = (
             self._load_modality("audio") if self.dataset.lower() == "tiktok" else None
         )
