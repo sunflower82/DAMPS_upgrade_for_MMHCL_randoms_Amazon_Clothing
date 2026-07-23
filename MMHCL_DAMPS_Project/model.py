@@ -99,6 +99,10 @@ def _safe_sparse_mm(sparse_mat: torch.Tensor, dense: torch.Tensor) -> torch.Tens
     with torch.amp.autocast(device_type=dense.device.type, enabled=False):
         d = dense.float() if needs_promote else dense
         s = sparse_mat
+        # Pattern B' rebuild / eval may hand us inference-mode sparse
+        # mats; autograd rejects those in torch.sparse.mm.
+        if torch.is_inference(s):
+            s = s.clone()
         if needs_promote and s.dtype in (torch.bfloat16, torch.float16):
             s = s.float()
         out = torch.sparse.mm(s, d)

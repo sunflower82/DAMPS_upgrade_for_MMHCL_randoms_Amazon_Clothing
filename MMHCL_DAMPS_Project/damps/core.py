@@ -327,9 +327,15 @@ class DAMPS(nn.Module):
         theta_c = torch.atan2(sum_sin, sum_cos)            # (C, F)
         theta_i = theta_c[cats]                             # (N, F)
 
-        # Build complex rotators (cast to complex64 for numerical safety)
-        rot_img = torch.exp(-1j * (theta_i / 2.0 + self.psi).to(torch.float32))
-        rot_txt = torch.exp(+1j * (theta_i / 2.0 + self.psi).to(torch.float32))
+        # Unit complex rotators via polar form — NEVER use Python ``1j`` /
+        # ``exp(±1j * phase)``. Inductor's backward compiler crashes on raw
+        # Python complex literals (pytorch#184100):
+        #   AttributeError: 'complex' object has no attribute 'get_name'
+        phase = (theta_i / 2.0 + self.psi).to(torch.float32)
+        cos_p = torch.cos(phase)
+        sin_p = torch.sin(phase)
+        rot_img = torch.complex(cos_p, -sin_p)   # exp(-j * phase)
+        rot_txt = torch.complex(cos_p, sin_p)    # exp(+j * phase)
 
         z_img_cal = z_img * rot_img
         z_txt_cal = z_txt * rot_txt
@@ -363,11 +369,15 @@ class DAMPS(nn.Module):
         # ``t`` MUST be the current *epoch* (set by ``set_epoch``), not the
         # cumulative number of forward passes — see Revision 9 audit WARN 3.
         if self.training:
-            t = float(self._current_epoch.item())
-            if t < self.warmup_epochs:
-                beta_t = 1.0 - 1.0 / (t + 1.0)
-            else:
-                beta_t = 0.99
+            # Tensor schedule on ``_current_epoch`` (0-d) so torch.compile
+            # does not recompile every epoch on ``.item()`` / Python ints.
+            t = self._current_epoch.to(dtype=torch.float32).reshape(())
+            warm = t.new_tensor(float(self.warmup_epochs))
+            beta_t = torch.where(
+                t < warm,
+                1.0 - 1.0 / (t + 1.0),
+                t.new_tensor(0.99),
+            )
             with torch.no_grad():
                 self.baseline_asc.mul_(beta_t).add_(
                     asc_per_item.detach().mean() * (1.0 - beta_t)

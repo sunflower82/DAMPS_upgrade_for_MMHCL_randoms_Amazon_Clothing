@@ -439,15 +439,19 @@ def parse_args() -> argparse.Namespace:
                              "complex-FFT backward probe. Reported "
                              "+20-40%% training speedup with "
                              "mode=reduce-overhead.")
-    parser.add_argument("--torch_compile_mode", type=str, default="reduce-overhead",
-                        help="torch.compile mode: {default, reduce-overhead, "
-                             "max-autotune}. 'reduce-overhead' is best for "
-                             "medium-sized models per the speedup guide.")
+    parser.add_argument(
+        "--torch_compile_mode",
+        type=str,
+        default="default",
+        help="torch.compile mode: {default, reduce-overhead, max-autotune}. "
+             "Default 'default' — DAMPS complex FFT + IMCF EMA is unsafe under "
+             "reduce-overhead CUDAGraphs (multi-step overwrite). Trainer "
+             "auto-falls back if a requested mode fails the multi-step probe.",
+    )
     parser.add_argument("--torch_compile_dynamic", type=int, default=0,
-                        help="1 = compile with dynamic=True. Default 0 so "
-                             "mode=reduce-overhead can use Inductor CUDA "
-                             "graphs (DAMPS inputs are fixed-shape). Set 1 "
-                             "only if you must tolerate shape changes.")
+                        help="1 = compile with dynamic=True. Default 0 for "
+                             "fixed-shape DAMPS inputs. Set 1 only if you must "
+                             "tolerate shape changes.")
     parser.add_argument(
         "--use_gpu_sample",
         type=int,

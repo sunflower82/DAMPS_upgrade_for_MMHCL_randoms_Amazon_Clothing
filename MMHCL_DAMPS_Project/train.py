@@ -112,83 +112,99 @@ except Exception:
     pass
 
 
-def _inductor_complex_backward_supported() -> bool:
-    """
-    Probe whether ``torch.compile``'s Inductor BACKWARD compiler can lower
-    a region that operates on complex tensors (rFFT -> ops -> iRFFT).
+def _probe_damps_compile_mode(mode: str, *, n_steps: int = 3) -> bool:
+    """Return True if ``mode`` survives a multi-step *real* DAMPS loop.
 
-    On affected PyTorch builds the backward compile crashes in
-    ``torch/_inductor/ir.py::add_alias`` with::
+    Must compile an actual ``damps.core.DAMPS`` instance — a synthetic
+    ``rfft→rot→irfft`` function can pass ``reduce-overhead`` while the
+    real module dies on the 2nd batch with CUDAGraph output overwrite.
 
-        torch._inductor.exc.InductorError:
-            AttributeError: 'complex' object has no attribute 'get_name'
-
-    The crash is raised from inside ``loss.backward()``'s
-    ``_backward_impl`` -> ``aot_config.bw_compiler`` chain and is **not**
-    caught by ``torch._dynamo.config.suppress_errors`` -- that flag only
-    covers Dynamo forward graph-capture errors, not AOT-autograd backward
-    compilation errors. Once Inductor decides to lower an FFT subgraph
-    that triggers this bug it will fire on every training step.
-
-    We therefore probe end-to-end (forward + backward through a tiny
-    ``rFFT -> rot -> iRFFT`` pipeline) **lazily** the first time
-    ``--use_torch_compile 1`` is requested. If the probe fails we skip
-    the ``torch.compile`` wrap on the DAMPS submodule entirely and run
-    it in eager mode. If the probe succeeds the wrap is applied as usual.
-
-    The probe runs on CPU and takes ~1-3 s. It is **not** invoked when
-    ``--use_torch_compile 0`` (the PACER / smoke default), so smoke logs
-    are no longer flooded with Inductor backward-compile tracebacks.
+    Never use Python ``1j`` in the probe (pytorch#184100). Probe on CUDA
+    only; Windows CPU Inductor is a false oracle for our training path.
     """
     if not hasattr(torch, "compile"):
         return False
-    # Silence Inductor's verbose "failed to eagerly compile backwards"
-    # dump during the probe — a caught failure is the expected outcome
-    # on affected Windows/CUDA builds and must not look like a training
-    # crash in smoke stdout.
+    if not torch.cuda.is_available():
+        return False
     import contextlib
     import io
     import logging as _logging
 
+    from damps.core import DAMPS
+
     _log = _logging.getLogger("torch._inductor")
     _prev_level = _log.level
+    device = torch.device("cuda")
+    d = 64
     try:
         _log.setLevel(_logging.CRITICAL)
-
-        def _probe(v: torch.Tensor) -> torch.Tensor:
-            # Replicates damps/core.py::_apply_apc's ``exp(1j * phi)``
-            # idiom so the probe predicts the real DAMPS compile path.
-            z = torch.fft.rfft(v, dim=-1, norm="ortho")
-            phi = v[..., : z.shape[-1]]
-            rot = torch.exp(1j * phi)
-            return torch.fft.irfft(z * rot, n=8, dim=-1, norm="ortho")
-
         with contextlib.redirect_stderr(io.StringIO()):
+            module = DAMPS(
+                d=d,
+                ablations={
+                    "apc": True,
+                    "avrf": False,
+                    "imcf": True,
+                    "permutation_fft": False,
+                },
+            ).to(device).train()
             compiled = torch.compile(
-                _probe, mode="reduce-overhead", dynamic=True
+                module, mode=str(mode), dynamic=False
             )
-            x = torch.randn(4, 8, requires_grad=True)
-            compiled(x).sum().backward()
+            for _ in range(int(n_steps)):
+                h_img = torch.randn(
+                    8, d, device=device, requires_grad=True
+                )
+                h_txt = torch.randn(
+                    8, d, device=device, requires_grad=True
+                )
+                cats = torch.randint(
+                    0, 10, (8,), device=device, dtype=torch.long
+                )
+                out = compiled(h_img, h_txt, item_categories=cats)
+                (out[0].sum() + out[1].sum()).backward()
         return True
     except Exception:
         return False
     finally:
         _log.setLevel(_prev_level)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
-# Lazy cache: None = not probed yet. Avoids paying the ~1-3 s Inductor
-# probe (and its stderr noise) on every import when compile is off.
-_INDUCTOR_COMPLEX_BACKWARD_OK: bool | None = None
+# Cache: requested_mode -> effective mode (or None = skip compile).
+_COMPILE_MODE_EFFECTIVE: dict[str, str | None] = {}
+
+
+def _resolve_damps_compile_mode(requested: str) -> str | None:
+    """Pick a safe Inductor mode for DAMPS, or ``None`` to stay eager.
+
+    Never probe ``reduce-overhead`` in-process: a failed CUDAGraph capture
+    invalidates the CUDA context for the subsequent training run.
+    """
+    key = str(requested)
+    if key in _COMPILE_MODE_EFFECTIVE:
+        return _COMPILE_MODE_EFFECTIVE[key]
+
+    effective: str | None
+    if key == "reduce-overhead":
+        effective = (
+            "default" if _probe_damps_compile_mode("default") else None
+        )
+    elif _probe_damps_compile_mode(key):
+        effective = key
+    elif key != "default" and _probe_damps_compile_mode("default"):
+        effective = "default"
+    else:
+        effective = None
+
+    _COMPILE_MODE_EFFECTIVE[key] = effective
+    return effective
 
 
 def _get_inductor_complex_backward_ok() -> bool:
-    """Return (and cache) the Inductor complex-backward probe result."""
-    global _INDUCTOR_COMPLEX_BACKWARD_OK
-    if _INDUCTOR_COMPLEX_BACKWARD_OK is None:
-        _INDUCTOR_COMPLEX_BACKWARD_OK = (
-            _inductor_complex_backward_supported()
-        )
-    return bool(_INDUCTOR_COMPLEX_BACKWARD_OK)
+    """Backward-compat: True iff some compile mode is safe on this build."""
+    return _resolve_damps_compile_mode("default") is not None
 
 
 from utility.parser import parse_args
@@ -536,30 +552,30 @@ class Trainer:
         # main_tercile._forward_embeddings() to guard against reusing the
         # wrong split's embeddings if the val/test call order ever changes.
         self._last_eval_split: str | None = None
-        # WandB-audit flag: True iff torch.compile was actually attached
-        # to self.model.damps (i.e. the Inductor complex-FFT probe passed
-        # AND the compile() call did not throw). Logged into wandb.config
-        # below so post-hoc analysis can separate 'compile enabled' from
-        # 'compile skipped' runs after PyTorch upgrades.
+        # WandB-audit: True iff torch.compile actually wrapped DAMPS.
+        # ``_compile_mode_effective`` may differ from the CLI request when
+        # reduce-overhead CUDAGraphs are unsafe on complex FFT graphs.
         self._compile_attached: bool = False
+        self._compile_mode_effective: str | None = None
         if bool(args.use_torch_compile) and hasattr(torch, "compile"):
-            if not _get_inductor_complex_backward_ok():
+            _req_mode = str(args.torch_compile_mode)
+            _eff_mode = _resolve_damps_compile_mode(_req_mode)
+            if _eff_mode is None:
                 self.logger.logging(
-                    "[speedup] torch.compile requested but this PyTorch "
-                    "build's Inductor BACKWARD compiler cannot lower DAMPS's "
-                    "complex FFT region (probe failed: 'complex' object has "
-                    "no attribute 'get_name'). Skipping the wrap and running "
-                    "DAMPS in eager mode."
+                    "[speedup] torch.compile requested but no Inductor mode "
+                    "survived the multi-step DAMPS spectral probe "
+                    f"(requested={_req_mode}). Running DAMPS in eager mode."
                 )
             else:
+                if _eff_mode != _req_mode:
+                    self.logger.logging(
+                        f"[speedup] torch_compile_mode={_req_mode} failed the "
+                        f"multi-step CUDAGraph-safe probe; falling back to "
+                        f"mode={_eff_mode}."
+                    )
                 try:
-                    # reduce-overhead + dynamic=False lets Inductor capture
-                    # CUDA graphs over the fixed-shape DAMPS region.
                     _dyn = bool(args.torch_compile_dynamic)
-                    if (
-                        str(args.torch_compile_mode) == "reduce-overhead"
-                        and _dyn
-                    ):
+                    if _eff_mode == "reduce-overhead" and _dyn:
                         self.logger.logging(
                             "[speedup] torch_compile_dynamic=1 with "
                             "mode=reduce-overhead disables Inductor "
@@ -567,13 +583,14 @@ class Trainer:
                         )
                     self.model.damps = torch.compile(           # type: ignore[assignment]
                         self.model.damps,
-                        mode=str(args.torch_compile_mode),
+                        mode=_eff_mode,
                         dynamic=_dyn,
                     )
                     self._compile_attached = True
+                    self._compile_mode_effective = _eff_mode
                     self.logger.logging(
                         f"[speedup] torch.compile enabled on DAMPS submodule "
-                        f"(mode={args.torch_compile_mode}, "
+                        f"(mode={_eff_mode}, requested={_req_mode}, "
                         f"dynamic={_dyn})"
                     )
                 except Exception as exc:                        # pragma: no cover
@@ -623,13 +640,19 @@ class Trainer:
     # ------------------------------------------------------------------
     #  Pattern B' Scheduled Rebuild
     # ------------------------------------------------------------------
-    @torch.inference_mode()
+    @torch.no_grad()
     def maybe_rebuild_hypergraph(self, epoch: int) -> None:
         """
         Rebuild the item-item multi-modal hypergraph from the Slim Momentum
         tables every ``rebuild_R`` epochs *after* the warm-up phase.
 
         Logs NNZ and average degree for transparency (spec Table 1).
+
+        Uses ``torch.no_grad`` (not ``inference_mode``): adjacency stored on
+        ``self.Item_mat`` is later multiplied with autograd embeddings in
+        the train forward. Tensors created under ``inference_mode`` are
+        permanently inference-tagged and crash at epoch 10 with
+        ``Inference tensors cannot be saved for backward``.
         """
         if epoch < self.warmup_epochs:
             return
@@ -650,8 +673,13 @@ class Trainer:
             h_aud = self.model.momentum.audio_table().to(self.device)
 
         new_adj = self.knn_router.build_graph_from_modalities(h_img, h_txt, h_aud)
-        new_adj = new_adj.to(self.device)
-        self.Item_mat = new_adj
+        # Force a normal (non-inference) sparse adjacency. Even under
+        # ``no_grad``, a clone made while an outer ``inference_mode`` is
+        # active stays inference-tagged and crashes the next train step.
+        with torch.inference_mode(mode=False):
+            self.Item_mat = (
+                new_adj.to(self.device).detach().clone()
+            )
         # Sparse adjacency change invalidates any captured CUDAGraph.
         if self._cuda_graph is not None:
             self.logger.logging(
@@ -942,6 +970,11 @@ class Trainer:
                 self.wandb.config.update(
                     {
                         "compile_attached": bool(self._compile_attached),
+                        "compile_mode_effective": (
+                            self._compile_mode_effective
+                            if self._compile_mode_effective is not None
+                            else "eager"
+                        ),
                         "cuda_graph_enabled": bool(self._cuda_graph_enabled),
                     },
                     allow_val_change=True,

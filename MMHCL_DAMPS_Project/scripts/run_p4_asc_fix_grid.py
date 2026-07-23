@@ -173,7 +173,9 @@ def _base_flags(
         "--eval_last_epochs", "20",
         "--use_gpu_eval", "1",
         "--use_torch_compile", "1",
-        "--torch_compile_mode", "reduce-overhead",
+        # DAMPS complex FFT is unsafe under Inductor reduce-overhead
+        # CUDAGraphs; mode=default is multi-step-probe-validated.
+        "--torch_compile_mode", "default",
         "--torch_compile_dynamic", "0",
         "--use_cuda_graph", "0",
         "--batch_size", str(BATCH_SIZE),

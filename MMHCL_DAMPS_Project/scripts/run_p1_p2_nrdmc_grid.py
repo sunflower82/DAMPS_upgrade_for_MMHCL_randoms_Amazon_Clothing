@@ -159,7 +159,7 @@ def _base_flags(
         "--use_torch_compile",
         "1",
         "--torch_compile_mode",
-        "reduce-overhead",
+        "default",
         "--torch_compile_dynamic",
         "0",
         "--use_cuda_graph",
