@@ -453,32 +453,54 @@ def parse_args() -> argparse.Namespace:
     # =====================================================================
     parser.add_argument(
         "--use_macp", type=int, default=0,
-        help="1 = enable MACP text whitening (P6.0). "
-             "0 (default) = leave text_feats untouched, matches the "
-             "P5.1 baseline bit-for-bit.",
+        help="1 = enable MACP whitening (P6.0 text and/or P6.1 image). "
+             "0 (default) = leave modality feats untouched, matches the "
+             "P5.1 baseline bit-for-bit. When 1, per-modality mode flags "
+             "(--macp_mode, --macp_image_mode) decide which streams "
+             "actually replace the raw features.",
     )
     parser.add_argument(
         "--macp_mode", type=str, default="residual",
         choices=("raw", "replace_pca", "replace_zca", "residual"),
-        help="How to combine the raw and whitened text streams. "
-             "'raw' short-circuits to no-op (equivalent to --use_macp 0). "
-             "'replace_*' swaps text_feats with the corresponding "
-             "stream. 'residual' (default) adds a scaled auxiliary "
-             "signal on top of the raw features -- safest option.",
+        help="[TEXT modality] How to combine the raw and whitened text "
+             "streams. 'raw' short-circuits to no-op. 'replace_*' swaps "
+             "text_feats with the corresponding stream. 'residual' adds "
+             "a scaled auxiliary signal on top of the raw features.",
     )
     parser.add_argument(
         "--macp_alpha_p", type=float, default=0.10,
-        help="Residual weight for the PCA->ICA stream in "
+        help="[TEXT] Residual weight for the PCA->ICA stream in "
              "'residual' mode. Tuned in {0.05, 0.10, 0.20} for the "
              "P6.0 grid.",
     )
     parser.add_argument(
         "--macp_alpha_z", type=float, default=0.10,
-        help="Residual weight for the ZCA stream in 'residual' mode.",
+        help="[TEXT] Residual weight for the ZCA stream in 'residual' mode.",
+    )
+    # ---- P6.1: symmetric image whitening --------------------------------
+    parser.add_argument(
+        "--macp_image_mode", type=str, default="raw",
+        choices=("raw", "replace_pca", "replace_zca", "residual"),
+        help="[IMAGE modality] How to combine raw and whitened image "
+             "streams. Default 'raw' preserves the P6.0 behaviour "
+             "(image left untouched). 'replace_*' swaps image_feats "
+             "with the corresponding stream. Prerequisite: run "
+             "scripts/preprocess_macp.py --modality image first.",
+    )
+    parser.add_argument(
+        "--macp_image_alpha_p", type=float, default=0.10,
+        help="[IMAGE] Residual weight for the PCA->ICA stream in "
+             "'residual' image mode.",
+    )
+    parser.add_argument(
+        "--macp_image_alpha_z", type=float, default=0.10,
+        help="[IMAGE] Residual weight for the ZCA stream in 'residual' "
+             "image mode.",
     )
     parser.add_argument(
         "--macp_verbose", type=int, default=1,
-        help="1 = print one-line MACP diagnostic during load.",
+        help="1 = print one-line MACP diagnostic during load "
+             "(one per modality when both are active).",
     )
 
     # =====================================================================

@@ -164,28 +164,50 @@ class Data:
         # ------------------------------------------------------------------
         # 4. Load raw modality features (used by DAMPS + cached I2I builds)
         # ------------------------------------------------------------------
-        self.image_feats: Optional[torch.Tensor] = self._load_modality("image")
+        image_raw = self._load_modality("image")
         text_raw = self._load_modality("text")
         # ------------------------------------------------------------------
-        # P6.0 -- MACP text-only whitening. When --use_macp 0 (default),
-        # ``fuse_text(mode='raw')`` is a strict no-op. Non-zero triggers
-        # residual injection or full replacement from the two streams
-        # produced by ``scripts/preprocess_macp.py``. Image features are
-        # deliberately untouched: P5.0 confirmed alpha_img<0 is the
-        # model's correct response to noisy Clothing image embeddings.
+        # P6.0 / P6.1 -- MACP whitening (text and/or image).
+        # When --use_macp 0 (default) both branches short-circuit and the
+        # loader behaves bit-for-bit like the pre-P6 baseline. When
+        # --use_macp 1, the per-modality --macp_mode / --macp_image_mode
+        # flags decide whether to swap in the pre-computed PCA->ICA or
+        # ZCA streams (produced by ``scripts/preprocess_macp.py``).
+        #
+        # P6.0 established replace_pca on text as the winner (+7.1 %
+        # R@20 on Clothing, +37 % / +46 % mid/tail). P6.1 tests whether
+        # symmetric image whitening reverses the alpha_img<0 collapse
+        # observed in the P6.0 log (alpha_img -> -0.84 under clean text).
         # ------------------------------------------------------------------
-        if bool(int(getattr(args, "use_macp", 0))) and text_raw is not None:
-            from damps.macp import MacpConfig, fuse_text
+        self._macp_diag: dict = {}
+        self._macp_image_diag: dict = {}
+        if bool(int(getattr(args, "use_macp", 0))):
+            from damps.macp import MacpConfig, fuse_text, fuse_image
             dataset_dir = os.path.join(args.data_path, args.dataset)
-            macp_cfg = MacpConfig(
-                mode=getattr(args, "macp_mode", "residual"),
-                alpha_p=float(getattr(args, "macp_alpha_p", 0.10)),
-                alpha_z=float(getattr(args, "macp_alpha_z", 0.10)),
-            )
-            text_raw, self._macp_diag = fuse_text(
-                text_raw, dataset_dir=dataset_dir, cfg=macp_cfg,
-                verbose=bool(int(getattr(args, "macp_verbose", 1))),
-            )
+            verbose = bool(int(getattr(args, "macp_verbose", 1)))
+
+            if text_raw is not None:
+                text_cfg = MacpConfig(
+                    mode=getattr(args, "macp_mode", "residual"),
+                    alpha_p=float(getattr(args, "macp_alpha_p", 0.10)),
+                    alpha_z=float(getattr(args, "macp_alpha_z", 0.10)),
+                )
+                text_raw, self._macp_diag = fuse_text(
+                    text_raw, dataset_dir=dataset_dir, cfg=text_cfg,
+                    verbose=verbose,
+                )
+
+            if image_raw is not None:
+                image_cfg = MacpConfig(
+                    mode=getattr(args, "macp_image_mode", "raw"),
+                    alpha_p=float(getattr(args, "macp_image_alpha_p", 0.10)),
+                    alpha_z=float(getattr(args, "macp_image_alpha_z", 0.10)),
+                )
+                image_raw, self._macp_image_diag = fuse_image(
+                    image_raw, dataset_dir=dataset_dir, cfg=image_cfg,
+                    verbose=verbose,
+                )
+        self.image_feats: Optional[torch.Tensor] = image_raw
         self.text_feats: Optional[torch.Tensor] = text_raw
         self.audio_feats: Optional[torch.Tensor] = (
             self._load_modality("audio") if self.dataset.lower() == "tiktok" else None

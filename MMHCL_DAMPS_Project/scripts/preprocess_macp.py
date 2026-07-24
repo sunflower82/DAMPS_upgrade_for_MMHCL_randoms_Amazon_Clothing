@@ -1,24 +1,32 @@
-"""scripts/preprocess_macp.py -- Offline MACP text-feature whitening.
+"""scripts/preprocess_macp.py -- Offline MACP whitening (text and/or image).
 
-Ships Priority 6.0 (P6.0) of the PACER-NRDMC upgrade roadmap: reproduces
+Ships Priority 6.0-6.1 of the PACER-NRDMC upgrade roadmap: reproduces
 TAMER (MM'25) "Multi-Aspect Content Preprocessing" (MACP) for the
-**text** modality only. Image features are deliberately left raw --
-Amazon Clothing image embeddings are noisy (P5.0 confirmed the model
-adaptively drives alpha_img -> -0.52), and whitening them would fight
-that correction.
+Amazon Clothing (and compatible) datasets.
 
-Two streams are produced from ``text_feat.npy``:
+Two whitening streams are produced per selected modality:
 
-* ``text_feat_pca_ica.npy`` -- PCA (dim-preserving rotation) followed by
-  FastICA. Emphasises statistically independent latent factors.
-* ``text_feat_zca.npy``     -- Zero-phase Component Analysis whitening
+* ``<mod>_feat_pca_ica.npy`` -- PCA (dim-preserving rotation) followed
+  by FastICA. Emphasises statistically independent latent factors.
+* ``<mod>_feat_zca.npy``     -- Zero-phase Component Analysis whitening
   (Cov = U diag(lam) U^T -> W = U diag(lam^{-1/2}) U^T). Decorrelates
   while remaining as close to the raw embedding as possible in L2.
 
 Both outputs share the input dimension so the downstream loader can
-either replace ``text_feats`` in-place or perform a residual injection
-``t_raw + alpha_p * t_pca_ica + alpha_z * t_zca`` without any dim
-gymnastics.
+either replace ``<mod>_feats`` in-place or perform a residual injection
+without any dim gymnastics.
+
+History
+-------
+* **P6.0**: text-only. Amazon Clothing R@20 mean of the ``replace_pca``
+  cell was +7.13 % vs the P5.1 trunk, mid tercile +36.8 %, tail +46.4 %.
+  Text raw was proven bit-blocked by covariance geometry.
+* **P6.1**: symmetric image whitening. The observed alpha_img trajectory
+  under text-MACP collapsed to -0.84 (vs -0.51 in the raw-text control),
+  suggesting the model actively suppressed the raw image stream in
+  favour of the clean text signal. Whitening image lets us test whether
+  the collapse is inherent to the Clothing image embeddings or is an
+  artefact of raw covariance leakage.
 
 Determinism
 -----------
@@ -28,15 +36,21 @@ verified by rerunning with the same seed and diffing MD5.
 
 Usage (from MMHCL_DAMPS_Project/)::
 
-    # Standard: reads ../data/Clothing/text_feat.npy and writes two
-    # sibling files next to it.
-    python scripts/preprocess_macp.py --dataset Clothing
+    # P6.0 text-only (preserves the original behaviour bit-for-bit):
+    python scripts/preprocess_macp.py --dataset Clothing --modality text
+
+    # P6.1 image-only:
+    python scripts/preprocess_macp.py --dataset Clothing --modality image
+
+    # Materialise all four .npy streams in one shot:
+    python scripts/preprocess_macp.py --dataset Clothing --modality both
 
     # Custom paths + seed:
-    python scripts/preprocess_macp.py \
-        --input   ../data/Clothing/text_feat.npy \
-        --out_dir ../data/Clothing/ \
-        --seed 42 --ica_max_iter 500 --pca_var_floor 0.999
+    python scripts/preprocess_macp.py \\
+        --input   ../data/Clothing/image_feat.npy \\
+        --out_dir ../data/Clothing/ \\
+        --modality image \\
+        --seed 42 --ica_max_iter 1000 --pca_var_floor 0.999
 """
 
 from __future__ import annotations
@@ -112,7 +126,7 @@ def pca_ica(
     x: np.ndarray,
     *,
     seed: int,
-    ica_max_iter: int = 500,
+    ica_max_iter: int = 1000,
     ica_tol: float = 1e-4,
     pca_var_floor: float | None = None,
 ) -> tuple[np.ndarray, dict]:
@@ -185,6 +199,7 @@ def pca_ica(
         ),
         "ica_n_iter": int(ica.n_iter_),
         "ica_max_iter": int(ica_max_iter),
+        "ica_converged": bool(int(ica.n_iter_) < int(ica_max_iter)),
         "mean_l2_before": float(np.linalg.norm(x - x.mean(0), axis=1).mean()),
         "mean_l2_after":  float(np.linalg.norm(y, axis=1).mean()),
     }
@@ -205,9 +220,25 @@ def _md5(path: Path, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
+# Filenames for each modality. Keep in lockstep with damps/macp.py.
+_MOD_FILES = {
+    "text":  {
+        "in":       "text_feat.npy",
+        "pca_ica":  "text_feat_pca_ica.npy",
+        "zca":      "text_feat_zca.npy",
+    },
+    "image": {
+        "in":       "image_feat.npy",
+        "pca_ica":  "image_feat_pca_ica.npy",
+        "zca":      "image_feat_zca.npy",
+    },
+}
+
+
 def _parse_cli(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Offline MACP whitening for PACER-NRDMC (text only)."
+        description="Offline MACP whitening for PACER-NRDMC "
+                    "(text and/or image)."
     )
     p.add_argument(
         "--dataset", type=str, default="Clothing",
@@ -219,9 +250,19 @@ def _parse_cli(argv: list[str] | None = None) -> argparse.Namespace:
         help="Root data directory (relative to MMHCL_DAMPS_Project/).",
     )
     p.add_argument(
+        "--modality", type=str, default="text",
+        choices=("text", "image", "both"),
+        help="Which modality (or modalities) to whiten. "
+             "'text' (default) preserves the P6.0 behaviour exactly; "
+             "'image' adds the P6.1 image streams; "
+             "'both' produces all four .npy files.",
+    )
+    p.add_argument(
         "--input", type=str, default=None,
-        help="Explicit path to text_feat.npy. Overrides "
-             "``--data_path/--dataset``.",
+        help="Explicit path to a *_feat.npy file. Overrides "
+             "``--data_path/--dataset``. Only meaningful when "
+             "``--modality`` selects a single stream (text or image); "
+             "with 'both', the modality-to-filename map takes over.",
     )
     p.add_argument(
         "--out_dir", type=str, default=None,
@@ -231,13 +272,16 @@ def _parse_cli(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--stream", type=str, default="both",
         choices=("pca_ica", "zca", "both"),
-        help="Which whitening streams to produce.",
+        help="Which whitening streams to produce per modality.",
     )
     p.add_argument(
         "--seed", type=int, default=42,
         help="Random seed for FastICA (ZCA is deterministic).",
     )
-    p.add_argument("--ica_max_iter", type=int, default=500)
+    p.add_argument("--ica_max_iter", type=int, default=1000,
+                   help="FastICA solver max_iter. Raised from 500 to "
+                        "1000 in P6.1 to eliminate convergence warnings "
+                        "on the image modality (higher-D embeddings).")
     p.add_argument("--ica_tol", type=float, default=1e-4)
     p.add_argument(
         "--pca_var_floor", type=float, default=None,
@@ -262,39 +306,44 @@ def _parse_cli(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parse_cli(argv)
+def _process_modality(
+    *,
+    mod: str,
+    in_path: Path,
+    out_dir: Path,
+    args: argparse.Namespace,
+    dtype_out: type,
+) -> dict:
+    """Run PCA->ICA and/or ZCA on a single modality's feature file.
 
-    if args.input is None:
-        in_path = Path(args.data_path) / args.dataset / "text_feat.npy"
-    else:
-        in_path = Path(args.input)
+    Returns a dict of per-stream diagnostics (may be empty if all
+    outputs already exist and --force 0).
+    """
+    files = _MOD_FILES[mod]
     if not in_path.is_file():
-        raise FileNotFoundError(f"Missing text_feat.npy: {in_path}")
+        raise FileNotFoundError(f"Missing {files['in']}: {in_path}")
 
-    out_dir = Path(args.out_dir) if args.out_dir else in_path.parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_pca_ica = out_dir / "text_feat_pca_ica.npy"
-    out_zca     = out_dir / "text_feat_zca.npy"
+    out_pca_ica = out_dir / files["pca_ica"]
+    out_zca     = out_dir / files["zca"]
 
-    print(f"[MACP] input:   {in_path}", flush=True)
-    print(f"[MACP] out_dir: {out_dir}", flush=True)
-    print(f"[MACP] stream:  {args.stream}  seed={args.seed}  "
+    print(f"\n[MACP:{mod}] input:   {in_path}", flush=True)
+    print(f"[MACP:{mod}] out_dir: {out_dir}", flush=True)
+    print(f"[MACP:{mod}] stream:  {args.stream}  seed={args.seed}  "
           f"dtype_out={args.dtype_out}", flush=True)
 
     x = np.load(in_path)
     if x.ndim != 2:
         raise ValueError(
-            f"text_feat.npy has shape {x.shape}; expected (N_items, D)."
+            f"{files['in']} has shape {x.shape}; expected (N_items, D)."
         )
-    print(f"[MACP] loaded: shape={x.shape}  dtype={x.dtype}", flush=True)
+    print(f"[MACP:{mod}] loaded: shape={x.shape}  dtype={x.dtype}", flush=True)
 
-    diagnostics: dict[str, dict] = {}
-    dtype_out = np.float32 if args.dtype_out == "float32" else np.float64
+    diagnostics: dict = {"input_shape": list(x.shape),
+                         "input_dtype": str(x.dtype)}
 
     if args.stream in ("both", "pca_ica"):
         if out_pca_ica.is_file() and not args.force:
-            print(f"[MACP] SKIP pca_ica: {out_pca_ica} exists "
+            print(f"[MACP:{mod}] SKIP pca_ica: {out_pca_ica} exists "
                   f"(use --force 1 to overwrite).", flush=True)
         else:
             t0 = time.time()
@@ -309,12 +358,20 @@ def main(argv: list[str] | None = None) -> int:
             s_pca["wall_seconds"] = wall
             s_pca["md5"] = _md5(out_pca_ica)
             diagnostics["pca_ica"] = s_pca
-            print(f"[MACP] wrote {out_pca_ica.name}  wall={wall:.1f}s  "
+            if not s_pca.get("ica_converged", True):
+                print(
+                    f"[MACP:{mod}] WARN ICA hit max_iter="
+                    f"{s_pca['ica_max_iter']} without converging "
+                    f"(tol={args.ica_tol}). Bump --ica_max_iter if "
+                    f"reproducibility across seeds matters.",
+                    flush=True,
+                )
+            print(f"[MACP:{mod}] wrote {out_pca_ica.name}  wall={wall:.1f}s  "
                   f"md5={s_pca['md5'][:12]}", flush=True)
 
     if args.stream in ("both", "zca"):
         if out_zca.is_file() and not args.force:
-            print(f"[MACP] SKIP zca: {out_zca} exists "
+            print(f"[MACP:{mod}] SKIP zca: {out_zca} exists "
                   f"(use --force 1 to overwrite).", flush=True)
         else:
             t0 = time.time()
@@ -324,28 +381,63 @@ def main(argv: list[str] | None = None) -> int:
             s_zca["wall_seconds"] = wall
             s_zca["md5"] = _md5(out_zca)
             diagnostics["zca"] = s_zca
-            print(f"[MACP] wrote {out_zca.name}  wall={wall:.1f}s  "
+            print(f"[MACP:{mod}] wrote {out_zca.name}  wall={wall:.1f}s  "
                   f"md5={s_zca['md5'][:12]}", flush=True)
+
+    return diagnostics
+
+
+def _select_modalities(name: str) -> tuple[str, ...]:
+    if name == "both":
+        return ("text", "image")
+    return (name,)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_cli(argv)
+
+    mods = _select_modalities(args.modality)
+    if args.input is not None and len(mods) != 1:
+        raise ValueError(
+            "--input is only valid when --modality is 'text' or 'image' "
+            "(with 'both', the dataset map decides both filenames)."
+        )
+
+    all_diag: dict = {}
+    dtype_out = np.float32 if args.dtype_out == "float32" else np.float64
+
+    for mod in mods:
+        files = _MOD_FILES[mod]
+        if args.input is not None:
+            in_path = Path(args.input)
+        else:
+            in_path = Path(args.data_path) / args.dataset / files["in"]
+        out_dir = Path(args.out_dir) if args.out_dir else in_path.parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+        all_diag[mod] = _process_modality(
+            mod=mod, in_path=in_path, out_dir=out_dir,
+            args=args, dtype_out=dtype_out,
+        )
 
     if args.log_json:
         log_path = Path(args.log_json)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "input": str(in_path),
-            "out_dir": str(out_dir),
-            "input_shape": list(x.shape),
-            "input_dtype": str(x.dtype),
+            "modalities": list(mods),
             "seed": args.seed,
-            "streams": diagnostics,
+            "streams": all_diag,
         }
         with log_path.open("w") as fh:
             json.dump(payload, fh, indent=2)
-        print(f"[MACP] log JSON: {log_path}", flush=True)
+        print(f"\n[MACP] log JSON: {log_path}", flush=True)
 
-    for name, d in diagnostics.items():
-        print(f"[MACP] {name} stats:", flush=True)
-        for k, v in d.items():
-            print(f"       {k:>28} = {v}", flush=True)
+    for mod, diag in all_diag.items():
+        for name, d in diag.items():
+            if not isinstance(d, dict):
+                continue
+            print(f"\n[MACP:{mod}] {name} stats:", flush=True)
+            for k, v in d.items():
+                print(f"       {k:>28} = {v}", flush=True)
 
     return 0
 
