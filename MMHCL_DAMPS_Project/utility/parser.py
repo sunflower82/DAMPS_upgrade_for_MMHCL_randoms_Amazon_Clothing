@@ -504,6 +504,33 @@ def parse_args() -> argparse.Namespace:
     )
 
     # =====================================================================
+    #  P6.4 -- TAMER Interest Tree augmentation
+    # =====================================================================
+    parser.add_argument(
+        "--enable_tamer",
+        type=int,
+        default=0,
+        help="1 = replace Item_mat with the TAMER interest-augmented "
+             "modality graph from codes.damps_tamer (requires "
+             "--tamer_interest_cache). 0 (default) = P6.3 modality-only.",
+    )
+    parser.add_argument(
+        "--tamer_interest_cache",
+        type=str,
+        default="",
+        help="Path to .npz written by "
+             "scripts/preprocess_interest_tree.py "
+             "(cooc_* + optional tree_* flat arrays).",
+    )
+    parser.add_argument(
+        "--alpha_interest",
+        type=float,
+        default=0.25,
+        help="TAMER Eq. 9 mixing weight for the interest (S^c) branch. "
+             "0.0 recovers the modality-only graph.",
+    )
+
+    # =====================================================================
     #  Pattern B' (Scheduled Rebuild)
     # =====================================================================
     parser.add_argument("--rebuild_R", type=int, default=5,

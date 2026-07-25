@@ -46,12 +46,10 @@ Usage (from MMHCL_DAMPS_Project/)::
 
 Wiring status
 -------------
-This commit ships the augmentation toolkit (codes/interest_tree.py,
-codes/damps_tamer.py) and the preprocess script but does NOT yet wire the
-``--tamer_interest_cache`` / ``--alpha_interest`` flags into
-utility/parser.py + model.py.  ``--dry_run 1`` validates the cache and
-prints the intended command line; a follow-up commit will land the
-parser + model changes.
+``--enable_tamer`` / ``--tamer_interest_cache`` / ``--alpha_interest`` are
+accepted by ``utility/parser.py`` and applied in ``train.py`` by replacing
+``Item_mat`` with the TAMER-augmented modality graph from
+``codes.damps_tamer.build_augmented_modality_graph``.
 """
 from __future__ import annotations
 
@@ -163,8 +161,15 @@ def _resolve_paths() -> tuple[Path, str]:
     return damps, py
 
 
-def _ensure_cache(damps_dir: Path, python_exe: str, dry_run: bool) -> Path:
-    cache = damps_dir / CACHE_PATH
+def _ensure_cache(
+    damps_dir: Path,
+    python_exe: str,
+    dry_run: bool,
+    cache_path: Path | None = None,
+) -> Path:
+    cache = Path(cache_path) if cache_path is not None else (damps_dir / CACHE_PATH)
+    if not cache.is_absolute():
+        cache = (damps_dir / cache).resolve()
     if cache.is_file():
         print(f"[P6.4] using existing cache: {cache}")
         return cache
@@ -189,6 +194,7 @@ def _ensure_cache(damps_dir: Path, python_exe: str, dry_run: bool) -> Path:
     if dry_run:
         print("[dry_run] skipping actual preprocess execution.")
         return cache
+    cache.parent.mkdir(parents=True, exist_ok=True)
     subprocess.check_call(cmd)
     if not cache.is_file():
         raise SystemExit(f"preprocess script did not produce {cache}")
@@ -196,12 +202,7 @@ def _ensure_cache(damps_dir: Path, python_exe: str, dry_run: bool) -> Path:
 
 
 def _base_flags(*, cfg: GridConfig, cache_path: Path, epoch: int, patience: int) -> list[str]:
-    """Mirrors P6.3 flags + new TAMER-augmentation flags.
-
-    NOTE: ``--tamer_interest_cache`` / ``--alpha_interest`` / ``--enable_tamer``
-    are placeholders here -- utility/parser.py + model.py wiring lands in a
-    follow-up commit.  Until then, ``--dry_run 1`` should be used.
-    """
+    """Mirrors P6.3 flags + TAMER Interest-Tree augmentation flags."""
     return [
         "--dataset", DATASET, "--gpu_id", "0",
         "--epoch", str(epoch), "--verbose", "5", "--eval_every", "5",
@@ -331,7 +332,22 @@ def main():
     p.add_argument("--epoch", type=int, default=EPOCH_DEFAULT)
     p.add_argument("--patience", type=int, default=PATIENCE_DEFAULT)
     p.add_argument("--dry_run", type=int, default=0)
+    # Canonical flag is --out; --output is accepted for notebook cell 9.24.
     p.add_argument("--out", type=str, default=OUT_JSON)
+    p.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Alias for --out (used by notebook cell 9.24).",
+    )
+    # Canonical cache is results/interest_tree_clothing.npz; --cache lets
+    # the notebook pass an explicit path from Step 3.
+    p.add_argument(
+        "--cache",
+        type=str,
+        default=None,
+        help="Path to interest_tree_*.npz (default: results/interest_tree_clothing.npz).",
+    )
     args = p.parse_args()
 
     damps_dir, python_exe = _resolve_paths()
@@ -339,7 +355,11 @@ def main():
     seeds = tuple(args.seeds) if args.seeds else SEEDS_DEFAULT
     print(f"[P6.4] seeds={seeds}")
 
-    cache_path = _ensure_cache(damps_dir, python_exe, bool(args.dry_run))
+    out_rel = args.output if args.output else args.out
+    cache_arg = Path(args.cache) if args.cache else None
+    cache_path = _ensure_cache(
+        damps_dir, python_exe, bool(args.dry_run), cache_path=cache_arg
+    )
 
     cfgs = build_configs(args.only)
     print(f"[P6.4] configs={[c.tag for c in cfgs]}")
@@ -383,7 +403,9 @@ def main():
         })
     ranked.sort(key=lambda x: (-(x["recall20_mean"] if not math.isnan(x["recall20_mean"]) else -1), x["tag"]))
 
-    out_path = damps_dir / args.out
+    out_path = Path(out_rel)
+    if not out_path.is_absolute():
+        out_path = damps_dir / out_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as fh:
         json.dump({"rows": rows, "ranked": ranked,

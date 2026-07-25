@@ -246,6 +246,23 @@ def build_augmented_modality_graph(
     return edge_index.to(device), edge_weight.to(device), n_items
 
 
+def edge_index_to_sparse_adj(
+    edge_index: torch.Tensor,
+    edge_weight: torch.Tensor,
+    n_items: int,
+) -> torch.Tensor:
+    """Convert ``(edge_index, edge_weight)`` to a coalesced sparse COO adj.
+
+    Used to feed the TAMER-augmented graph into MMHCL's existing
+    ``torch.sparse.mm(Item_mat, ·)`` item HyperGCN path.
+    """
+    return torch.sparse_coo_tensor(
+        edge_index.long().cpu(),
+        edge_weight.float().cpu(),
+        size=(int(n_items), int(n_items)),
+    ).coalesce()
+
+
 # ---------------------------------------------------------------------------
 # Thin nn.Module wrapper -- item-side GCN over the augmented graph
 # ---------------------------------------------------------------------------
@@ -277,6 +294,7 @@ class TAMERAugmentedNRDMCLite(nn.Module):
 __all__ = [
     "save_interest_cache",
     "load_interest_cache",
+    "edge_index_to_sparse_adj",
     "build_augmented_modality_graph",
     "TAMERAugmentedNRDMCLite",
     "fuse_augmented",  # re-export for convenience

@@ -231,6 +231,51 @@ if bool(args.enable_simgcl) and bool(getattr(args, "enable_nrdmc_lite", 0)):
     )
 
 
+def _build_tamer_item_mat(
+    *,
+    image_feats: torch.Tensor | np.ndarray,
+    text_feats: torch.Tensor | np.ndarray,
+    cache: dict[str, np.ndarray],
+    alpha_interest: float,
+    device: str = "cpu",
+) -> torch.Tensor:
+    """Build a TAMER-augmented sparse ``Item_mat`` from modality feats + cache.
+
+    Args:
+        image_feats: Item image features ``[n_items, d_img]``.
+        text_feats: Item text features ``[n_items, d_txt]``.
+        cache: Output of ``codes.damps_tamer.load_interest_cache``.
+        alpha_interest: Eq. 9 interest-branch weight.
+        device: Device hint for the exact k-NN step inside the builder.
+
+    Returns:
+        Coalesced CPU sparse COO adjacency suitable for ``Trainer.Item_mat``.
+    """
+    from codes.damps_tamer import (
+        build_augmented_modality_graph,
+        edge_index_to_sparse_adj,
+    )
+
+    def _to_numpy(x: torch.Tensor | np.ndarray) -> np.ndarray:
+        if isinstance(x, torch.Tensor):
+            return x.detach().float().cpu().numpy()
+        return np.asarray(x, dtype=np.float32)
+
+    modality_feats = {
+        "img": _to_numpy(image_feats),
+        "txt": _to_numpy(text_feats),
+    }
+    alphas = {"img": 1.0, "txt": 1.0}
+    edge_index, edge_weight, n_items = build_augmented_modality_graph(
+        modality_feats,
+        cache,
+        alphas=alphas,
+        alpha_interest=float(alpha_interest),
+        device=str(device),
+    )
+    return edge_index_to_sparse_adj(edge_index, edge_weight, n_items)
+
+
 def _resolve_early_stopping_monitor(
     monitor: str,
     ks: list[int],
@@ -371,6 +416,29 @@ class Trainer:
         self.UI_mat: torch.Tensor = data_config["UI_mat"].to(self.device)
         self.User_mat: torch.Tensor = data_config["User_mat"].to(self.device)
         self.Item_mat: torch.Tensor = data_config["Item_mat"].to(self.device)
+
+        # ---------------- P6.4 TAMER Interest Tree (optional) ----------------
+        self._tamer_cache: dict[str, np.ndarray] | None = None
+        self._alpha_interest: float = float(
+            getattr(args, "alpha_interest", 0.0)
+        )
+        self._enable_tamer: bool = bool(int(getattr(args, "enable_tamer", 0)))
+        if self._enable_tamer:
+            cache_path = str(getattr(args, "tamer_interest_cache", "") or "")
+            if not cache_path or not os.path.isfile(cache_path):
+                raise FileNotFoundError(
+                    f"--enable_tamer 1 requires a valid "
+                    f"--tamer_interest_cache .npz (got {cache_path!r}). "
+                    "Run scripts/preprocess_interest_tree.py first."
+                )
+            from codes.damps_tamer import load_interest_cache
+
+            self._tamer_cache = load_interest_cache(cache_path)
+            self.logger.logging(
+                f"[P6.4/TAMER] enabled  cache={cache_path}  "
+                f"alpha_interest={self._alpha_interest:.3f}  "
+                f"n_items={int(self._tamer_cache['n_items'])}"
+            )
 
         # ---------------- Modality features ----------------
         if data_generator.image_feats is None or data_generator.text_feats is None:
@@ -672,7 +740,24 @@ class Trainer:
         if self.model.has_audio:
             h_aud = self.model.momentum.audio_table().to(self.device)
 
-        new_adj = self.knn_router.build_graph_from_modalities(h_img, h_txt, h_aud)
+        if self._enable_tamer and self._tamer_cache is not None:
+            # Rebuild the TAMER-augmented graph from current momentum
+            # tables so Pattern B' still refreshes modality topology.
+            new_adj = _build_tamer_item_mat(
+                image_feats=h_img,
+                text_feats=h_txt,
+                cache=self._tamer_cache,
+                alpha_interest=self._alpha_interest,
+                device=str(self.device),
+            )
+            self.logger.logging(
+                f"[Rebuild/TAMER] epoch={epoch} alpha_interest="
+                f"{self._alpha_interest:.3f}"
+            )
+        else:
+            new_adj = self.knn_router.build_graph_from_modalities(
+                h_img, h_txt, h_aud
+            )
         # Force a normal (non-inference) sparse adjacency. Even under
         # ``no_grad``, a clone made while an outer ``inference_mode`` is
         # active stays inference-tagged and crashes the next train step.
@@ -1613,6 +1698,37 @@ def main() -> None:
     config["UI_mat"] = data_generator.get_UI_mat()
     config["User_mat"] = data_generator.get_U2U_mat()
     config["Item_mat"] = data_generator.build_static_hypergraph()
+
+    # P6.4: replace the static modality hypergraph with the TAMER
+    # interest-augmented graph when --enable_tamer 1.
+    if bool(int(getattr(args, "enable_tamer", 0))):
+        cache_path = str(getattr(args, "tamer_interest_cache", "") or "")
+        if not cache_path or not os.path.isfile(cache_path):
+            raise FileNotFoundError(
+                f"--enable_tamer 1 requires --tamer_interest_cache "
+                f"(got {cache_path!r})"
+            )
+        from codes.damps_tamer import load_interest_cache
+
+        if data_generator.image_feats is None or data_generator.text_feats is None:
+            raise RuntimeError(
+                "TAMER Item_mat build requires image + text features."
+            )
+        tamer_cache = load_interest_cache(cache_path)
+        config["Item_mat"] = _build_tamer_item_mat(
+            image_feats=data_generator.image_feats,
+            text_feats=data_generator.text_feats,
+            cache=tamer_cache,
+            alpha_interest=float(args.alpha_interest),
+            device=(
+                f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
+            ),
+        )
+        print(
+            f"[P6.4/TAMER] Item_mat replaced from {cache_path} "
+            f"(alpha_interest={float(args.alpha_interest):.3f}, "
+            f"nnz={config['Item_mat']._nnz()})"
+        )
 
     trainer = Trainer(data_config=config)
     trainer.train()
