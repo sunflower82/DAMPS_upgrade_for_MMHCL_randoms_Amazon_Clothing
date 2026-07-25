@@ -25,9 +25,11 @@ Usage
 -----
 ::
 
+    # From MMHCL_DAMPS_Project/ — data lives at the repo-root sibling:
     python scripts/preprocess_interest_tree.py \\
         --dataset Clothing \\
-        --data_dir ./data \\
+        --data_dir ../data \\
+        --core 5 \\
         --output   ./results/interest_tree_clothing.npz \\
         --knn_k_cooc 20 \\
         --knn_k_mod  10 \\
@@ -40,9 +42,12 @@ Usage
 
 Inputs
 ------
-* ``--data_dir/<dataset>/train.txt``: one training user per line, whitespace
-  separated ``user_id item_id [item_id ...]``.  This is the same file used by
-  ``main_tercile.py`` and Original-MMHCL's data loader.
+* Preferred (this repo / MMHCL):
+  ``--data_dir/<dataset>/<core>-core/train.json`` — dict
+  ``{uid_str: [item_id, ...]}`` as used by ``utility/load_data.py``.
+* Fallback (Original-MMHCL):
+  ``--data_dir/<dataset>/train.txt`` — one training user per line,
+  whitespace-separated ``user_id item_id [item_id ...]``.
 
 Outputs
 -------
@@ -54,6 +59,7 @@ Outputs
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -74,39 +80,113 @@ from codes.roaring_cooc import timed_cooc  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Train.txt loader -- vectorised numpy fast path
+# Train split loaders (MMHCL train.json  OR  Original-MMHCL train.txt)
 # ---------------------------------------------------------------------------
-def _load_train_pairs(path: Path):
-    """Return (pairs_ndarray, n_items) from an Original-MMHCL style train.txt.
+def _resolve_train_file(
+    data_dir: Path, dataset: str, core: int
+) -> Path:
+    """Locate the train split under this repo's data layout.
 
-    Vectorised: reads the whole file as bytes, ``str.split`` per line, then
-    numpy-parses the resulting ragged token lists into an (E, 2) int64 array.
-    On Clothing (~200k pairs) this is ~10-20x faster than the per-token
-    Python ``int()`` loop.
+    Preference order:
+      1. ``<data_dir>/<dataset>/<core>-core/train.json``  (MMHCL / this repo)
+      2. ``<data_dir>/<dataset>/train.json``
+      3. ``<data_dir>/<dataset>/train.txt``               (Original-MMHCL)
+      4. ``<data_dir>/train.txt``                         (already inside dataset)
+    """
+    candidates = [
+        data_dir / dataset / f"{core}-core" / "train.json",
+        data_dir / dataset / "train.json",
+        data_dir / dataset / "train.txt",
+        data_dir / "train.txt",
+        data_dir / f"{core}-core" / "train.json",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    tried = "\n  - ".join(str(c) for c in candidates)
+    raise SystemExit(
+        f"train split not found under data_dir={data_dir} "
+        f"dataset={dataset} core={core}. Tried:\n  - {tried}"
+    )
+
+
+def _pairs_from_ragged(
+    users: list[int], items: list[np.ndarray]
+) -> tuple[np.ndarray, int]:
+    """Stack ragged per-user item lists into an (E, 2) int64 array."""
+    if not users:
+        return np.empty((0, 2), dtype=np.int64), 0
+    counts = np.fromiter(
+        (t.size for t in items), dtype=np.int64, count=len(items)
+    )
+    us_arr = np.repeat(np.asarray(users, dtype=np.int64), counts)
+    it_arr = np.concatenate(items).astype(np.int64, copy=False)
+    pairs = np.stack([us_arr, it_arr], axis=1)  # (E, 2)
+    n_items = int(it_arr.max()) + 1
+    return pairs, n_items
+
+
+def _load_train_pairs_json(path: Path) -> tuple[np.ndarray, int]:
+    """Return (pairs, n_items) from MMHCL ``{uid: [item, ...]}`` JSON."""
+    with path.open("r", encoding="utf-8") as fh:
+        train = json.load(fh)
+    if not isinstance(train, dict):
+        raise SystemExit(
+            f"Expected dict in {path}, got {type(train).__name__}"
+        )
+    users: list[int] = []
+    items: list[np.ndarray] = []
+    for uid_str, item_list in train.items():
+        if not item_list:
+            continue
+        toks = np.asarray(item_list, dtype=np.int64)
+        if toks.size == 0:
+            continue
+        users.append(int(uid_str))
+        items.append(toks)
+    return _pairs_from_ragged(users, items)
+
+
+def _load_train_pairs_txt(path: Path) -> tuple[np.ndarray, int]:
+    """Return (pairs, n_items) from Original-MMHCL whitespace train.txt.
+
+    Vectorised: reads the whole file, ``str.split`` per line, then
+    numpy-parses the ragged token lists into an (E, 2) int64 array.
     """
     with path.open("r", encoding="utf-8") as fh:
         lines = fh.read().splitlines()
     users: list[int] = []
-    items: list[int] = []
+    items: list[np.ndarray] = []
     for ln in lines:
         parts = ln.split()
         if len(parts) < 2:
             continue
         u = int(parts[0])
-        # numpy fromstring on the tail avoids a Python-level int() per token
         toks = np.fromstring(" ".join(parts[1:]), sep=" ", dtype=np.int64)
         if toks.size == 0:
             continue
         users.append(u)
         items.append(toks)
-    if not users:
-        return np.empty((0, 2), dtype=np.int64), 0
-    counts = np.fromiter((t.size for t in items), dtype=np.int64, count=len(items))
-    us_arr = np.repeat(np.asarray(users, dtype=np.int64), counts)
-    it_arr = np.concatenate(items).astype(np.int64, copy=False)
-    pairs = np.stack([us_arr, it_arr], axis=1)                        # (E, 2)
-    n_items = int(it_arr.max()) + 1
-    return pairs, n_items
+    return _pairs_from_ragged(users, items)
+
+
+def _load_train_pairs(path: Path) -> tuple[np.ndarray, int]:
+    """Dispatch to JSON or TXT loader based on file suffix."""
+    if path.suffix.lower() == ".json":
+        return _load_train_pairs_json(path)
+    return _load_train_pairs_txt(path)
+
+
+def _infer_n_items(
+    data_dir: Path, dataset: str, n_items_from_train: int
+) -> int:
+    """Bump n_items from modality feature rows when available."""
+    for name in ("image_feat.npy", "text_feat.npy"):
+        feat = data_dir / dataset / name
+        if feat.is_file():
+            n_feat = int(np.load(feat, mmap_mode="r").shape[0])
+            return max(n_items_from_train, n_feat)
+    return n_items_from_train
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +195,18 @@ def _load_train_pairs(path: Path):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--dataset", required=True)
-    p.add_argument("--data_dir", default="./data")
+    p.add_argument(
+        "--data_dir",
+        default="./data",
+        help="Parent of <dataset>/ (repo-root data/ for this project).",
+    )
+    p.add_argument(
+        "--core",
+        type=int,
+        default=5,
+        help="MMHCL core split folder (<dataset>/<core>-core/train.json). "
+             "Ignored when a train.txt is found instead.",
+    )
     p.add_argument("--output", required=True)
     p.add_argument("--knn_k_cooc", type=int, default=20)
     p.add_argument("--knn_k_mod", type=int, default=10)
@@ -162,16 +253,21 @@ def main():
     )
     args = p.parse_args()
 
-    # 1) Load train.txt (vectorised numpy path).
-    train_path = Path(args.data_dir) / args.dataset / "train.txt"
-    if not train_path.is_file():
-        raise SystemExit(f"train.txt not found at {train_path}")
+    # 1) Load train split (MMHCL train.json or Original-MMHCL train.txt).
+    data_dir = Path(args.data_dir)
+    train_path = _resolve_train_file(data_dir, args.dataset, int(args.core))
     print(f"[P6.4-preprocess] loading {train_path} ...")
     t0 = time.perf_counter()
     pairs_arr, n_items_from_file = _load_train_pairs(train_path)
+    n_items_from_file = _infer_n_items(
+        data_dir, args.dataset, n_items_from_file
+    )
     wall_load = time.perf_counter() - t0
     n_pairs = int(pairs_arr.shape[0])
-    print(f"    n_pairs={n_pairs}  n_items={n_items_from_file}  ({wall_load:.2f}s)")
+    print(
+        f"    n_pairs={n_pairs}  n_items={n_items_from_file}  "
+        f"({wall_load:.2f}s)"
+    )
 
     # timed_cooc expects a list of (u, i) tuples for the roaring path, but
     # the sparse/torch paths take any (E, 2)-indexable structure. Convert

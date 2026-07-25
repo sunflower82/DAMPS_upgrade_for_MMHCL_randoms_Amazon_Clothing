@@ -36,7 +36,7 @@ Usage (from MMHCL_DAMPS_Project/)::
 
     # Rebuild cache (once per dataset):
     python scripts/preprocess_interest_tree.py --dataset Clothing \\
-        --data_dir ./data \\
+        --data_dir ../data --core 5 \\
         --output ./results/interest_tree_clothing.npz
 
     # P6.4 grid:
@@ -174,12 +174,16 @@ def _ensure_cache(damps_dir: Path, python_exe: str, dry_run: bool) -> Path:
         str(damps_dir / "scripts" / "preprocess_interest_tree.py"),
         "--dataset", DATASET,
         "--data_dir", str(damps_dir.parent / "data"),
+        "--core", "5",
         "--output", str(cache),
         "--knn_k_cooc", str(KNN_K_COOC),
         "--knn_k_mod", str(KNN_K_MOD),
         "--n_order", str(N_ORDER),
         "--gamma", str(GAMMA),
         "--tau", str(TAU),
+        "--cooc_method", "auto",
+        "--precompute_tree",
+        "--tree_workers", "4",
     ]
     print("[cmd] " + " ".join(cmd))
     if dry_run:
