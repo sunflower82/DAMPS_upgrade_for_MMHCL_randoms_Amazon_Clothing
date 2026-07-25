@@ -27,11 +27,20 @@ History
   favour of the clean text signal. Whitening image lets us test whether
   the collapse is inherent to the Clothing image embeddings or is an
   artefact of raw covariance leakage.
-* **P6.1a** (this file): five wall-clock speedups. Text stays bit-exact
+* **P6.1a**: five wall-clock speedups. Text stays bit-exact
   with P6.0 by default; image gets a truncated-PCA fast path plus an
   optional cuML backend and process-level parallelism when both
   modalities are requested. See docstring of ``pca_ica()`` and the CLI
   flags ``--n_jobs``, ``--ica_backend``, ``--pca_var_floor_image``.
+* **P6.1b** (this revision): Windows-native GPU FastICA via PyTorch.
+  cuML/RAPIDS wheels do not exist for Windows -- the ``cuml`` backend
+  silently degraded to sklearn on the user's RTX 5090 host. New
+  ``--ica_backend torch`` uses ``torch.linalg.{svd,eigh}`` on CUDA
+  (native Windows wheels) and typically yields 8-20x speedup vs
+  sklearn on D=4096 image. The ``auto`` selector now prefers
+  ``torch`` > ``cuml`` > ``sklearn`` and image's per-modality default
+  is ``auto`` (text stays ``sklearn`` for P6.0 bit-exact
+  reproducibility).
 
 Determinism
 -----------
@@ -57,9 +66,17 @@ Usage (from MMHCL_DAMPS_Project/)::
     # Force sequential (single process):
     python scripts/preprocess_macp.py --dataset Clothing --modality both --n_jobs 1
 
-    # Force cuML backend (RTX 5090 + cuML 24.x):
+    # Force cuML backend (RTX 5090 + cuML 24.x, Linux/WSL2 only):
     python scripts/preprocess_macp.py --dataset Clothing --modality both \\
         --ica_backend cuml
+
+    # Force torch-CUDA backend (Windows-native RTX 5090 friendly):
+    python scripts/preprocess_macp.py --dataset Clothing --modality both \\
+        --ica_backend torch
+
+    # Per-modality: text bit-exact sklearn, image GPU-auto:
+    python scripts/preprocess_macp.py --dataset Clothing --modality both \\
+        --ica_backend_text sklearn --ica_backend_image auto
 
     # Custom paths + seed:
     python scripts/preprocess_macp.py \\
@@ -82,6 +99,16 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
+
+
+# When invoked as ``python scripts/preprocess_macp.py`` the CWD is the
+# project root but ``sys.path[0]`` is the ``scripts/`` directory, so
+# ``from codes.fast_ica_torch import ...`` inside pca_ica() would fail.
+# Prepend the project root so the ``codes`` package is importable both
+# from bare CLI use and from spawned ProcessPoolExecutor workers.
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 
 # --------------------------------------------------------------------------- #
@@ -140,30 +167,69 @@ def zca_whiten(x: np.ndarray, *, eps: float = 1e-5) -> tuple[np.ndarray, dict]:
 # --------------------------------------------------------------------------- #
 #  cuML detection (deferred so sklearn-only environments never import cudf)
 # --------------------------------------------------------------------------- #
-def _resolve_ica_backend(backend: str) -> str:
-    """Return concrete backend name after resolving 'auto'.
+_VALID_BACKENDS = ("auto", "sklearn", "cuml", "torch")
 
-    On 'auto' we prefer cuML iff it imports cleanly; otherwise fall back
-    to sklearn. Explicit 'cuml' with a missing package raises so the
-    caller notices instead of silently running slow sklearn.
-    """
-    backend = backend.lower()
-    if backend not in ("auto", "sklearn", "cuml"):
-        raise ValueError(f"Unknown --ica_backend: {backend!r}")
-    if backend == "sklearn":
-        return "sklearn"
+
+def _try_import_cuml() -> bool:
     try:
         import cuml  # noqa: F401
         from cuml.decomposition import FastICA as _CumlFastICA  # noqa: F401
-    except Exception as _e:                                      # pragma: no cover
-        if backend == "cuml":
-            raise RuntimeError(
-                f"--ica_backend cuml requested but cuML import failed: "
-                f"{_e!r}. Install RAPIDS cuML matching the local CUDA "
-                f"driver, or pass --ica_backend sklearn."
-            ) from _e
+        return True
+    except Exception:                                            # pragma: no cover
+        return False
+
+
+def _try_import_torch_cuda() -> bool:
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except Exception:                                            # pragma: no cover
+        return False
+
+
+def _resolve_ica_backend(backend: str) -> str:
+    """Return concrete backend name after resolving 'auto'.
+
+    Priority on ``auto``: ``torch`` (CUDA) > ``cuml`` > ``sklearn``.
+    Torch takes precedence because it works on Windows-native RTX 5090
+    hosts (cuML wheels are Linux/WSL-only). Explicit ``cuml`` / ``torch``
+    with a missing dependency raises so the caller notices instead of
+    silently running slow sklearn.
+    """
+    backend = backend.lower()
+    if backend not in _VALID_BACKENDS:
+        raise ValueError(f"Unknown --ica_backend: {backend!r}")
+    if backend == "sklearn":
         return "sklearn"
-    return "cuml"
+    if backend == "torch":
+        if not _try_import_torch_cuda():
+            # Not required to be CUDA -- torch CPU still works, just
+            # slower. Only raise if torch itself is missing.
+            try:
+                import torch  # noqa: F401
+                return "torch"
+            except Exception as _e:                              # pragma: no cover
+                raise RuntimeError(
+                    f"--ica_backend torch requested but torch import "
+                    f"failed: {_e!r}. `pip install torch` (CUDA build "
+                    f"recommended) or pass --ica_backend sklearn."
+                ) from _e
+        return "torch"
+    if backend == "cuml":
+        if not _try_import_cuml():                               # pragma: no cover
+            raise RuntimeError(
+                "--ica_backend cuml requested but cuML import failed. "
+                "Install RAPIDS cuML matching the local CUDA driver "
+                "(Linux/WSL2 only), or pass --ica_backend torch / "
+                "--ica_backend sklearn."
+            )
+        return "cuml"
+    # backend == 'auto'
+    if _try_import_torch_cuda():
+        return "torch"
+    if _try_import_cuml():
+        return "cuml"
+    return "sklearn"
 
 
 # --------------------------------------------------------------------------- #
@@ -227,6 +293,7 @@ def pca_ica(
 
     # Now dispatch to the requested FastICA implementation.
     ica_n_iter: int
+    ica_meta: dict = {}
     if ica_backend == "cuml":
         # cuML expects float32 device input.
         from cuml.decomposition import FastICA as CumlFastICA
@@ -240,6 +307,19 @@ def pca_ica(
         yp = np.asarray(ica.fit_transform(xp.astype(np.float32)),
                         dtype=np.float64)
         ica_n_iter = int(getattr(ica, "n_iter_", ica_max_iter))
+    elif ica_backend == "torch":
+        # Windows-native GPU FastICA. Runs on the FIRST visible CUDA
+        # device by default and falls back to CPU if none available.
+        # NB: xp is already PCA-rotated with k columns, so torch
+        # FastICA re-whitens (cheap, matches sklearn semantics).
+        # We only import lazily to keep sklearn-only workers slim.
+        from codes.fast_ica_torch import fast_ica_torch
+        yp, ica_meta = fast_ica_torch(
+            xp, n_components=k,
+            max_iter=ica_max_iter, tol=ica_tol,
+            seed=seed, dtype="float32",
+        )
+        ica_n_iter = int(ica_meta.get("n_iter", ica_max_iter))
     else:
         from sklearn.decomposition import FastICA
         ica = FastICA(
@@ -272,6 +352,10 @@ def pca_ica(
         "mean_l2_before": float(np.linalg.norm(x - x.mean(0), axis=1).mean()),
         "mean_l2_after":  float(np.linalg.norm(y, axis=1).mean()),
     }
+    if ica_meta:
+        # Surface torch-specific device/dtype info for the log JSON.
+        for _k, _v in ica_meta.items():
+            stats.setdefault(f"ica_torch_{_k}", _v)
     return y, stats
 
 
@@ -322,28 +406,44 @@ _MOD_DEFAULTS = {
         "ica_tol":       1e-4,
         "ica_max_iter":  1000,
         "pca_var_floor": None,
+        # Text keeps sklearn to preserve the P6.0 bit-exact loadings.
+        "ica_backend":   "sklearn",
     },
     "image": {
         "ica_tol":       5e-4,
         "ica_max_iter":  500,
         "pca_var_floor": 0.95,
+        # Image auto-detects the fastest backend (torch > cuml > sklearn).
+        "ica_backend":   "auto",
     },
 }
 
 
 def _resolve_mod_knobs(mod: str, args: argparse.Namespace) -> dict:
-    """Merge global + per-modality flags into concrete knob values."""
+    """Merge global + per-modality flags into concrete knob values.
+
+    Resolution order (later wins):
+      1. ``_MOD_DEFAULTS[mod]``           (per-modality default)
+      2. ``--<knob>_<mod>``               (per-modality flag)
+      3. ``--<knob>``                     (global flag)
+
+    The global-wins rule holds for tol/max_iter/pca_var_floor so a user
+    can force a uniform value across text+image with a single flag.
+    Backend follows the same rule -- global wins -- which means
+    ``--ica_backend torch`` on the command line forces both modalities
+    to torch (useful for A/B tests).
+    """
     d = dict(_MOD_DEFAULTS[mod])
+    _knobs = ("ica_tol", "ica_max_iter", "pca_var_floor", "ica_backend")
     # Per-modality overrides (--ica_tol_text, --ica_tol_image, ...)
-    for k in ("ica_tol", "ica_max_iter", "pca_var_floor"):
+    for k in _knobs:
         v = getattr(args, f"{k}_{mod}", None)
         if v is not None:
             d[k] = v
-    # Global overrides ONLY if the user set them explicitly (i.e. they
-    # deviate from the sentinel value None). Global sentinels default
-    # to None so the per-modality tables above win when nothing is
-    # passed.
-    for k in ("ica_tol", "ica_max_iter", "pca_var_floor"):
+    # Global overrides ONLY if the user set them explicitly (sentinel
+    # None means 'unset'). Global sentinels default to None so the
+    # per-modality tables above win when nothing is passed.
+    for k in _knobs:
         v = getattr(args, k, None)
         if v is not None:
             d[k] = v
@@ -420,12 +520,26 @@ def _parse_cli(argv: list[str] | None = None) -> argparse.Namespace:
         p.add_argument(f"--pca_var_floor_{_mod}", type=float, default=None,
                        help=f"Per-modality PCA variance floor for {_mod}.")
     p.add_argument(
-        "--ica_backend", type=str, default="sklearn",
-        choices=("auto", "sklearn", "cuml"),
-        help="FastICA implementation. 'auto' prefers cuML if importable, "
-             "else falls back to sklearn. 'sklearn' (default) preserves "
-             "bit-exact reproducibility; 'cuml' is 5-15x faster on "
-             "high-D image but produces slightly different loadings.",
+        "--ica_backend", type=str, default=None,
+        choices=_VALID_BACKENDS,
+        help="Global FastICA backend override. Sentinel default (None) "
+             "means 'use per-modality defaults': text -> sklearn (bit-exact "
+             "P6.0), image -> auto. Explicit values force both modalities "
+             "to the same backend. 'auto' prefers torch > cuml > sklearn; "
+             "'torch' is Windows-friendly (torch.linalg on CUDA); 'cuml' "
+             "needs RAPIDS wheels (Linux/WSL2 only); 'sklearn' is CPU.",
+    )
+    p.add_argument(
+        "--ica_backend_text", type=str, default=None,
+        choices=_VALID_BACKENDS,
+        help="Per-modality FastICA backend for text. Wins over the "
+             "per-modality default (sklearn) but loses to --ica_backend.",
+    )
+    p.add_argument(
+        "--ica_backend_image", type=str, default=None,
+        choices=_VALID_BACKENDS,
+        help="Per-modality FastICA backend for image. Wins over the "
+             "per-modality default (auto) but loses to --ica_backend.",
     )
     p.add_argument(
         "--n_jobs", type=int, default=2,
@@ -466,7 +580,10 @@ def _process_modality_worker(payload: dict) -> tuple[str, dict]:
     stream    = payload["stream"]
     force     = int(payload["force"])
     dtype_out = np.float32 if payload["dtype_out"] == "float32" else np.float64
-    backend   = payload["ica_backend"]
+    # Resolve backend inside the worker so 'auto' picks the fastest
+    # backend visible to THIS process (CUDA state can differ across
+    # spawned workers -- e.g. one might have CUDA_VISIBLE_DEVICES set).
+    backend   = _resolve_ica_backend(payload["ica_backend"])
 
     files = _MOD_FILES[mod]
     if not in_path.is_file():
@@ -558,13 +675,9 @@ def main(argv: list[str] | None = None) -> int:
             "(with 'both', the dataset map decides both filenames)."
         )
 
-    # Resolve backend once. 'auto' becomes 'sklearn' or 'cuml' here so
-    # every worker inherits an unambiguous concrete choice.
-    ica_backend = _resolve_ica_backend(args.ica_backend)
-    if args.ica_backend == "auto":
-        print(f"[MACP] --ica_backend auto -> {ica_backend}", flush=True)
-
-    # Build the per-modality payloads.
+    # Build the per-modality payloads. Backend is passed unresolved so
+    # each worker can pick between torch/cuml/sklearn based on the
+    # CUDA state visible inside its own process (safer for spawn+CUDA).
     payloads: list[dict] = []
     for mod in mods:
         files = _MOD_FILES[mod]
@@ -579,12 +692,13 @@ def main(argv: list[str] | None = None) -> int:
             "mod":         mod,
             "in_path":     str(in_path),
             "out_dir":     str(out_dir),
-            "knobs":       knobs,
+            "knobs":       {k: v for k, v in knobs.items()
+                            if k != "ica_backend"},
             "seed":        int(args.seed),
             "stream":      args.stream,
             "force":       int(args.force),
             "dtype_out":   args.dtype_out,
-            "ica_backend": ica_backend,
+            "ica_backend": knobs["ica_backend"],
         })
 
     all_diag: dict = {}
@@ -617,7 +731,9 @@ def main(argv: list[str] | None = None) -> int:
             "modalities":  list(mods),
             "seed":        args.seed,
             "n_jobs":      n_workers,
-            "ica_backend": ica_backend,
+            "ica_backend_requested": {
+                pl["mod"]: pl["ica_backend"] for pl in payloads
+            },
             "streams":     all_diag,
         }
         with log_path.open("w") as fh:
