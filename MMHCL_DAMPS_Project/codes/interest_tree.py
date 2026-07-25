@@ -200,10 +200,114 @@ def fuse_augmented(
     return out
 
 
+# ---------------------------------------------------------------------------
+# Precomputed interest-tree flattener (P6.4a)
+# ---------------------------------------------------------------------------
+def precompute_interest_tree_flat(
+    graph: Dict[int, Dict[int, float]],
+    n_order: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Run ``build_interest_tree`` for every anchor and flatten to arrays.
+
+    Returns (anchors, neighbours, orders, weights) as parallel int64/int64/
+    int32/float32 arrays with one entry per (anchor, hop, neighbour) tuple.
+    Because the BFS depends only on ``graph`` (top-k co-occurrence) and
+    ``n_order`` -- not on gamma/tau/alpha -- the flat result is reused
+    across every P6.4 grid cell, moving the ~Python BFS cost off the
+    training loop.
+    """
+    anchors: List[int] = []
+    neighbours: List[int] = []
+    orders: List[int] = []
+    weights: List[float] = []
+    for i in graph.keys():
+        tree = build_interest_tree(graph, i, n_order)
+        for order, level in tree.items():
+            for j, w in level:
+                anchors.append(i)
+                neighbours.append(int(j))
+                orders.append(int(order))
+                weights.append(float(w))
+    return (
+        np.asarray(anchors, dtype=np.int64),
+        np.asarray(neighbours, dtype=np.int64),
+        np.asarray(orders, dtype=np.int32),
+        np.asarray(weights, dtype=np.float32),
+    )
+
+
+def precompute_interest_tree_flat_parallel(
+    graph: Dict[int, Dict[int, float]],
+    n_order: int,
+    num_workers: int = 0,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Parallel variant of ``precompute_interest_tree_flat``.
+
+    Splits the anchor keys across ``num_workers`` processes (0 or 1 =
+    sequential). Each worker gets a shallow copy of ``graph`` (BFS reads
+    only, no writes). Windows-native ``spawn`` friendly -- the worker
+    function is a module-level callable.
+    """
+    if num_workers <= 1:
+        return precompute_interest_tree_flat(graph, n_order)
+    import concurrent.futures as _cf
+
+    anchor_ids = sorted(graph.keys())
+    if not anchor_ids:
+        return (np.empty(0, np.int64), np.empty(0, np.int64),
+                np.empty(0, np.int32), np.empty(0, np.float32))
+    # Chunk contiguously so each worker gets a similar-sized share.
+    chunk = (len(anchor_ids) + num_workers - 1) // num_workers
+    slices = [anchor_ids[k:k + chunk] for k in range(0, len(anchor_ids), chunk)]
+
+    out_a: List[np.ndarray] = []
+    out_n: List[np.ndarray] = []
+    out_o: List[np.ndarray] = []
+    out_w: List[np.ndarray] = []
+    with _cf.ProcessPoolExecutor(max_workers=num_workers) as pool:
+        futs = [pool.submit(_bfs_chunk_worker, graph, s, n_order) for s in slices]
+        for fut in futs:
+            a, n, o, w = fut.result()
+            out_a.append(a)
+            out_n.append(n)
+            out_o.append(o)
+            out_w.append(w)
+    return (np.concatenate(out_a),
+            np.concatenate(out_n),
+            np.concatenate(out_o),
+            np.concatenate(out_w))
+
+
+def _bfs_chunk_worker(
+    graph: Dict[int, Dict[int, float]],
+    anchors: List[int],
+    n_order: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """ProcessPoolExecutor worker: BFS the given anchor slice."""
+    a_out: List[int] = []
+    n_out: List[int] = []
+    o_out: List[int] = []
+    w_out: List[float] = []
+    for i in anchors:
+        tree = build_interest_tree(graph, i, n_order)
+        for order, level in tree.items():
+            for j, w in level:
+                a_out.append(i)
+                n_out.append(int(j))
+                o_out.append(int(order))
+                w_out.append(float(w))
+    return (np.asarray(a_out, dtype=np.int64),
+            np.asarray(n_out, dtype=np.int64),
+            np.asarray(o_out, dtype=np.int32),
+            np.asarray(w_out, dtype=np.float32))
+
+
 __all__ = [
     "build_weighted_binary_relations",
     "build_interest_tree",
     "augment_similarity",
     "augment_similarity_sparse",
     "fuse_augmented",
+    "precompute_interest_tree_flat",
+    "precompute_interest_tree_flat_parallel",
 ]

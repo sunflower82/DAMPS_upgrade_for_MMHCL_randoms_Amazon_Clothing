@@ -75,12 +75,22 @@ def save_interest_cache(
     gamma: float,
     tau: float,
     n_items: int,
+    tree_anchors: Optional[np.ndarray] = None,
+    tree_neighbours: Optional[np.ndarray] = None,
+    tree_orders: Optional[np.ndarray] = None,
+    tree_weights: Optional[np.ndarray] = None,
 ) -> None:
-    """Persist the pre-computed interest graph + hyper-params to .npz."""
+    """Persist the pre-computed interest graph + hyper-params to .npz.
+
+    Optionally also persists the *flattened* per-anchor BFS interest tree
+    (see ``codes/interest_tree.py::precompute_interest_tree_flat``) as
+    ``tree_anchors, tree_neighbours, tree_orders, tree_weights``. When
+    present, ``build_augmented_modality_graph`` takes the vectorised sparse
+    path instead of the per-row BFS + LIL random-access loop.
+    """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        p,
+    kwargs = dict(
         cooc_rows=cooc_rows.astype(np.int64),
         cooc_cols=cooc_cols.astype(np.int64),
         cooc_vals=cooc_vals.astype(np.float32),
@@ -91,6 +101,12 @@ def save_interest_cache(
         tau=np.float32(tau),
         n_items=np.int32(n_items),
     )
+    if tree_anchors is not None:
+        kwargs["tree_anchors"] = tree_anchors.astype(np.int64)
+        kwargs["tree_neighbours"] = tree_neighbours.astype(np.int64)
+        kwargs["tree_orders"] = tree_orders.astype(np.int32)
+        kwargs["tree_weights"] = tree_weights.astype(np.float32)
+    np.savez_compressed(p, **kwargs)
 
 
 def load_interest_cache(path: str | Path) -> Dict[str, np.ndarray]:
@@ -141,9 +157,31 @@ def build_augmented_modality_graph(
     tau = float(cache["tau"])
     n_items = int(cache["n_items"])
 
-    graph = build_weighted_binary_relations(
-        cache["cooc_rows"], cache["cooc_cols"], cache["cooc_vals"], knn_k_cooc
+    # Fast path (P6.4a): if the cache carries a precomputed flat interest
+    # tree, build the coefficient sparse matrix once and reuse it across
+    # every modality view. Falls back to per-anchor BFS + LIL otherwise
+    # (backwards-compatible with pre-P6.4a caches).
+    has_flat_tree = (
+        "tree_anchors" in cache
+        and "tree_neighbours" in cache
+        and "tree_orders" in cache
+        and "tree_weights" in cache
+        and cache["tree_anchors"].size > 0
     )
+    coef_csr: Optional[sp.csr_matrix] = None
+    if has_flat_tree and alpha_interest > 0.0:
+        # coef[i,j] = gamma * exp(-(order-1)) * w_ij^tau  (Eq. 7).
+        t_a = cache["tree_anchors"]
+        t_n = cache["tree_neighbours"]
+        t_o = cache["tree_orders"].astype(np.float32)
+        t_w = cache["tree_weights"].astype(np.float32)
+        coefs = (gamma * np.exp(-(t_o - 1.0)) * np.power(t_w, tau)).astype(np.float32)
+        coef_csr = sp.csr_matrix((coefs, (t_a, t_n)), shape=(n_items, n_items))
+        graph = None  # not needed on the fast path
+    else:
+        graph = build_weighted_binary_relations(
+            cache["cooc_rows"], cache["cooc_cols"], cache["cooc_vals"], knn_k_cooc
+        )
 
     per_view_edges: Dict[str, sp.csr_matrix] = {}
     for name, feats in modality_feats.items():
@@ -154,21 +192,27 @@ def build_augmented_modality_graph(
             (vals.astype(np.float32) / 2.0, (rows, cols)),
             shape=(n_items, n_items),
         )
-        # Interest tree bonus per anchor -- accumulate into LIL for random access.
-        lil = base.tolil()
         if alpha_interest > 0.0:
-            # Only augment rows that actually have anchor entries in ``graph``
-            # -- items with no co-occurrence neighbours contribute 0 bonus.
-            for i in graph.keys():
-                tree = build_interest_tree(graph, i, n_order)
-                for order, level in tree.items():
-                    coef = gamma * float(np.exp(-(order - 1)))
-                    for j, w in level:
-                        s_ij = base[i, j]
-                        if s_ij == 0.0:
-                            continue
-                        lil[i, j] = lil[i, j] + coef * (w ** tau) * s_ij
-        per_view_edges[name] = lil.tocsr()
+            if coef_csr is not None:
+                # Vectorised: bonus[i,j] = coef[i,j] * base[i,j] where
+                # both matrices have entries. ``sp.multiply`` is O(nnz).
+                bonus = coef_csr.multiply(base)
+                per_view_edges[name] = (base + bonus).tocsr()
+            else:
+                # Legacy per-anchor BFS + LIL loop (kept for cache compat).
+                lil = base.tolil()
+                for i in graph.keys():                                # type: ignore[union-attr]
+                    tree = build_interest_tree(graph, i, n_order)      # type: ignore[arg-type]
+                    for order, level in tree.items():
+                        coef = gamma * float(np.exp(-(order - 1)))
+                        for j, w in level:
+                            s_ij = base[i, j]
+                            if s_ij == 0.0:
+                                continue
+                            lil[i, j] = lil[i, j] + coef * (w ** tau) * s_ij
+                per_view_edges[name] = lil.tocsr()
+        else:
+            per_view_edges[name] = base.tocsr()
 
     # Interest-only branch (S^c symmetric adjacency, no modality gating).
     if alpha_interest > 0.0:
