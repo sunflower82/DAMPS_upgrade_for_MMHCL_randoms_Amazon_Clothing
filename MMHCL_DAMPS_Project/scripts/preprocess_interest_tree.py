@@ -255,6 +255,17 @@ def main():
 
     # 1) Load train split (MMHCL train.json or Original-MMHCL train.txt).
     data_dir = Path(args.data_dir)
+    # Common notebook misconfig: cwd=MMHCL_DAMPS_Project and
+    # ``--data_dir data`` (local empty folder). Prefer the repo-root
+    # sibling ``../data`` that actually holds Clothing/5-core/.
+    if not (data_dir / args.dataset).is_dir():
+        alt = (_ROOT.parent / "data").resolve()
+        if (alt / args.dataset).is_dir():
+            print(
+                f"[P6.4-preprocess] data_dir={data_dir} has no "
+                f"{args.dataset}/; falling back to {alt}"
+            )
+            data_dir = alt
     train_path = _resolve_train_file(data_dir, args.dataset, int(args.core))
     print(f"[P6.4-preprocess] loading {train_path} ...")
     t0 = time.perf_counter()
