@@ -115,52 +115,151 @@ def _write_pami_input(txns: list[list[int]], path: Path, sep: str = "\t") -> Non
             fh.write("\n")
 
 
-def _mine_rsfp(input_tsv: Path, min_sup: float, min_ratio: float, sep: str = "\t"):
+def _pami_absolute_min_sup(min_sup: float | int | str) -> int:
+    """Convert CLI min_sup into an *absolute count* for PAMI RSFPGrowth.
+
+    PAMI's ``RSFPGrowth.__convert`` treats ``float`` (and numeric strings
+    containing ``'.'``) as a *fraction of |Database|*:
+
+        float 20.0  ->  20.0 * N_txns   (e.g. 787740 on Clothing)
+        int   20    ->  20             (absolute count, intended)
+        str  "20"   ->  20
+        str  "0.01" ->  0.01 * N_txns
+
+    Our CLI documents ``--min_sup`` as an absolute item-count threshold, so
+    we always coerce to ``int`` before constructing the miner.
+    """
+    if isinstance(min_sup, bool):
+        raise ValueError(f"min_sup must be a positive count, got {min_sup!r}")
+    if isinstance(min_sup, int):
+        value = min_sup
+    elif isinstance(min_sup, float):
+        if not min_sup.is_integer():
+            raise ValueError(
+                f"--min_sup={min_sup!r} is a non-integer float. Pass an "
+                "absolute integer count (e.g. 20). PAMI would otherwise "
+                "treat floats as a fraction of |Database|."
+            )
+        value = int(min_sup)
+    else:
+        text = str(min_sup).strip()
+        if not text:
+            raise ValueError("--min_sup is empty")
+        if "." in text:
+            raise ValueError(
+                f"--min_sup={min_sup!r} looks fractional. Pass an absolute "
+                "integer count (e.g. 20)."
+            )
+        value = int(text)
+    if value <= 0:
+        raise ValueError(f"--min_sup must be > 0, got {value}")
+    return value
+
+
+def _mine_rsfp(
+    input_tsv: Path,
+    min_sup: float | int | str,
+    min_ratio: float,
+    sep: str = "\t",
+) -> dict:
     """Run PAMI RSFPGrowth. Returns dict {pattern_str: support}."""
     from PAMI.relativeFrequentPattern.basic import RSFPGrowth as alg
-    obj = alg.RSFPGrowth(str(input_tsv), min_sup, min_ratio, sep=sep)
+
+    abs_min_sup = _pami_absolute_min_sup(min_sup)
+    # Pass int (NOT float): see _pami_absolute_min_sup docstring.
+    obj = alg.RSFPGrowth(str(input_tsv), abs_min_sup, float(min_ratio), sep=sep)
     obj.mine()
-    return obj.getPatterns()
+    patterns = obj.getPatterns()
+    print(
+        f"[rsfp] PAMI converted minSup={getattr(obj, '_minSup', abs_min_sup)} "
+        f"(requested absolute count={abs_min_sup})"
+    )
+    return patterns
 
 
 # ---------------------------------------------------------------------------
 # Pattern -> edge triples
 # ---------------------------------------------------------------------------
-def _patterns_to_2itemset_edges(patterns: dict, n_items: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _parse_pattern_tokens(pat: object) -> list[int]:
+    """Normalise a PAMI pattern key into a list of item ids.
+
+    ``getPatterns()`` joins items with tabs and often leaves a trailing tab
+    (e.g. ``'123\\t456\\t'``).  ``__finalPatterns`` may also use tuples of
+    string item ids.
+    """
+    if isinstance(pat, (list, tuple)):
+        raw = [str(t).strip() for t in pat]
+    else:
+        raw = [t for t in str(pat).replace(",", " ").split() if t.strip()]
+        # split() already collapses tabs/spaces; keep an explicit tab path
+        # for odd encodings that survive as single tokens.
+        if len(raw) == 1 and "\t" in raw[0]:
+            raw = [t for t in raw[0].split("\t") if t.strip()]
+    toks: list[int] = []
+    for token in raw:
+        token = token.strip()
+        if not token:
+            continue
+        toks.append(int(token))
+    return toks
+
+
+def _parse_support(sup: object) -> float:
+    """Parse PAMI support values such as ``'35 : 1.0'`` or bare numbers."""
+    if isinstance(sup, (int, float)):
+        return float(sup)
+    text = str(sup).strip()
+    if ":" in text:
+        text = text.split(":", maxsplit=1)[0].strip()
+    return float(text.split()[0])
+
+
+def _patterns_to_2itemset_edges(
+    patterns: dict, n_items: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Filter to 2-itemsets and return symmetric COO (rows, cols, vals).
 
     PAMI returns ``{pattern_str: support_str_or_int}``.  Pattern_str is
-    typically space-separated tokens; support_str_or_int can be int/float or
-    string encoded.
+    typically tab/space-separated tokens; support is often
+    ``'{count} : {ratio}'``.
     """
     rows: list[int] = []
     cols: list[int] = []
     vals: list[float] = []
     dropped = 0
+    n_one = 0
+    n_longer = 0
     for pat, sup in patterns.items():
-        # Normalise pattern into list of ints.
-        if isinstance(pat, (list, tuple)):
-            toks = [int(t) for t in pat]
-        else:
-            toks = [int(t) for t in str(pat).strip().split() if t]
+        toks = _parse_pattern_tokens(pat)
+        if len(toks) == 1:
+            n_one += 1
+            continue
         if len(toks) != 2:
+            n_longer += 1
             continue
         i, j = toks
         if i == j or i < 0 or j < 0 or i >= n_items or j >= n_items:
             dropped += 1
             continue
-        try:
-            w = float(sup)
-        except (TypeError, ValueError):
-            w = float(str(sup).strip().split()[0])
+        w = _parse_support(sup)
         rows.extend([i, j])
         cols.extend([j, i])
         vals.extend([w, w])
-    if dropped:
-        print(f"[rsfp] dropped {dropped} out-of-range 2-itemset patterns")
+    print(
+        f"[rsfp] pattern sizes: 1-item={n_one} 2-item={len(rows) // 2} "
+        f">2-item={n_longer} dropped_oor={dropped}"
+    )
     if not rows:
-        return (np.zeros(0, np.int64), np.zeros(0, np.int64), np.zeros(0, np.float32))
-    return (np.asarray(rows, np.int64), np.asarray(cols, np.int64), np.asarray(vals, np.float32))
+        return (
+            np.zeros(0, np.int64),
+            np.zeros(0, np.int64),
+            np.zeros(0, np.float32),
+        )
+    return (
+        np.asarray(rows, np.int64),
+        np.asarray(cols, np.int64),
+        np.asarray(vals, np.float32),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -217,8 +316,15 @@ def main() -> None:
     ap.add_argument("--core", type=int, default=5)
     ap.add_argument("--alphas", type=float, nargs="+",
                     default=[0.10, 0.20, 0.40])
-    ap.add_argument("--min_sup", type=float, default=20.0,
-                    help="PAMI RSFPGrowth minSup (absolute item count).")
+    ap.add_argument(
+        "--min_sup",
+        type=int,
+        default=20,
+        help=(
+            "PAMI RSFPGrowth minSup as an absolute transaction count. "
+            "Must be int: PAMI treats floats as a fraction of |Database|."
+        ),
+    )
     ap.add_argument("--min_ratio", type=float, default=0.4,
                     help="PAMI RSFPGrowth minRatio (relative frequent).")
     ap.add_argument("--output_prefix", type=Path,
@@ -226,7 +332,13 @@ def main() -> None:
     ap.add_argument("--work_dir", type=Path,
                     default=Path("./results/_rsfp_work"))
     ap.add_argument("--skip_mining_if_cached", type=int, default=1,
-                    help="If patterns.pkl already exists, reuse it.")
+                    help="If a non-empty patterns.pkl already exists, reuse it.")
+    ap.add_argument(
+        "--force_remine",
+        type=int,
+        default=0,
+        help="Ignore cached patterns.pkl and re-run RSFPGrowth.",
+    )
     args = ap.parse_args()
 
     args.work_dir.mkdir(parents=True, exist_ok=True)
@@ -258,30 +370,63 @@ def main() -> None:
     print(f"[rsfp] loaded {len(txns)} transactions, n_items_data={n_items_data}")
 
     pami_input = args.work_dir / f"rsfp_txn_{args.dataset}.tsv"
-    patterns_pkl = args.work_dir / f"rsfp_patterns_{args.dataset}_ms{int(args.min_sup)}_mr{args.min_ratio}.pkl"
+    abs_min_sup = _pami_absolute_min_sup(args.min_sup)
+    patterns_pkl = (
+        args.work_dir
+        / f"rsfp_patterns_{args.dataset}_ms{abs_min_sup}_mr{args.min_ratio}.pkl"
+    )
 
-    if args.skip_mining_if_cached and patterns_pkl.exists():
-        import pickle
-        print(f"[rsfp] reusing cached patterns: {patterns_pkl}")
+    import pickle
+
+    patterns: dict | None = None
+    reuse_ok = (
+        (not args.force_remine)
+        and bool(args.skip_mining_if_cached)
+        and patterns_pkl.exists()
+    )
+    if reuse_ok:
+        print(f"[rsfp] loading cached patterns: {patterns_pkl}")
         with patterns_pkl.open("rb") as fh:
             patterns = pickle.load(fh)
-    else:
+        if not isinstance(patterns, dict) or not patterns:
+            print(
+                "[rsfp] cached patterns are empty/invalid "
+                "(likely mined with float min_sup). Re-mining..."
+            )
+            patterns = None
+
+    if patterns is None:
         _write_pami_input(txns, pami_input, sep="\t")
         print(f"[rsfp] wrote PAMI input: {pami_input}")
         t0 = time.time()
-        print(f"[rsfp] mining RSFPGrowth minSup={args.min_sup} minRatio={args.min_ratio} ...")
-        patterns = _mine_rsfp(pami_input, args.min_sup, args.min_ratio, sep="\t")
+        print(
+            f"[rsfp] mining RSFPGrowth minSup={abs_min_sup} (absolute) "
+            f"minRatio={args.min_ratio} ..."
+        )
+        patterns = _mine_rsfp(
+            pami_input, abs_min_sup, args.min_ratio, sep="\t"
+        )
         print(f"[rsfp] mined {len(patterns)} patterns in {time.time() - t0:.1f}s")
-        import pickle
+        if not patterns:
+            raise SystemExit(
+                "[rsfp] RSFPGrowth returned 0 patterns. "
+                "Lower --min_sup / --min_ratio, and ensure --min_sup is an "
+                "integer absolute count (PAMI treats floats as |DB| fractions)."
+            )
         with patterns_pkl.open("wb") as fh:
             pickle.dump(patterns, fh)
+        print(f"[rsfp] cached patterns -> {patterns_pkl}")
 
     # 4) Build M_rsfp (2-itemset edges).
     rows, cols, vals = _patterns_to_2itemset_edges(patterns, n_items)
-    print(f"[rsfp] 2-itemset edges: {len(rows) // 2} unique pairs (symmetric COO nnz={len(rows)})")
+    print(
+        f"[rsfp] 2-itemset edges: {len(rows) // 2} unique pairs "
+        f"(symmetric COO nnz={len(rows)})"
+    )
     if len(rows) == 0:
         raise SystemExit(
-            "[rsfp] no 2-itemset patterns found. Lower --min_sup or --min_ratio."
+            "[rsfp] no 2-itemset patterns found. Lower --min_sup or "
+            "--min_ratio (and delete empty patterns.pkl if present)."
         )
     M_rsfp = sp.coo_matrix(
         (vals, (rows, cols)), shape=(n_items, n_items)
