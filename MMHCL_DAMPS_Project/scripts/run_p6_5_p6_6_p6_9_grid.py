@@ -295,20 +295,67 @@ def _parse_run_output(out: str) -> dict:
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
-def _run_one(cmd: list[str], log_path: Path, dry_run: bool) -> tuple[int, str, float]:
+def _resolve_damps_dir() -> Path:
+    """Locate MMHCL_DAMPS_Project (same convention as other P6 drivers)."""
+    cwd = Path.cwd().resolve()
+    if (cwd / "main_tercile.py").is_file():
+        return cwd
+    if (cwd / "MMHCL_DAMPS_Project" / "main_tercile.py").is_file():
+        return (cwd / "MMHCL_DAMPS_Project").resolve()
+    here = Path(__file__).resolve().parent
+    if here.name == "scripts" and (here.parent / "main_tercile.py").is_file():
+        return here.parent
+    raise FileNotFoundError(
+        "Could not locate MMHCL_DAMPS_Project/main_tercile.py. "
+        "Run from MMHCL_DAMPS_Project or the repo root."
+    )
+
+
+def _resolve_main_py(damps_dir: Path, main_arg: Path) -> Path:
+    """Resolve training entrypoint; never silently use missing codes/main.py."""
+    candidates = [
+        main_arg if main_arg.is_absolute() else (damps_dir / main_arg),
+        damps_dir / "main_tercile.py",
+        damps_dir / "main.py",
+    ]
+    for cand in candidates:
+        if cand.is_file():
+            return cand.resolve()
+    raise FileNotFoundError(
+        f"Training entrypoint not found. Tried: "
+        f"{[str(c) for c in candidates]}. "
+        "Expected main_tercile.py under MMHCL_DAMPS_Project "
+        "(codes/main.py does not exist in this repo)."
+    )
+
+
+def _run_one(
+    cmd: list[str],
+    log_path: Path,
+    dry_run: bool,
+    cwd: Path,
+) -> tuple[int, str, float]:
     if dry_run:
         print("[dry_run] " + " ".join(shlex.quote(c) for c in cmd))
         return 0, "", 0.0
     t0 = time.time()
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"\n[grid] running: {' '.join(shlex.quote(c) for c in cmd[-40:])}")
+    print(f"\n[grid] cwd: {cwd}")
+    print(f"[grid] entry: {cmd[0]} {cmd[1]}")
+    print(f"[grid] running: {' '.join(shlex.quote(c) for c in cmd[-40:])}")
     print(f"[grid] logging to: {log_path}")
     with log_path.open("wb") as fh:
-        proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(
+            cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=str(cwd)
+        )
         exit_code = proc.wait()
     wall = time.time() - t0
     out = log_path.read_text(encoding="utf-8", errors="replace")
     print(f"[grid] exit={exit_code}  wall={wall/60.0:.1f} min")
+    if exit_code != 0:
+        tail = "\n".join(out.splitlines()[-40:])
+        print(f"[grid] --- log tail (exit={exit_code}) ---\n{tail}\n"
+              f"[grid] --- end log tail ---")
     return exit_code, out, wall
 
 
@@ -318,7 +365,15 @@ def main() -> None:
                     default=[23946202, 1557638902])
     ap.add_argument("--epoch", type=int, default=100)
     ap.add_argument("--python", type=str, default=sys.executable)
-    ap.add_argument("--main", type=Path, default=Path("codes/main.py"))
+    ap.add_argument(
+        "--main",
+        type=Path,
+        default=Path("main_tercile.py"),
+        help=(
+            "Training entrypoint relative to MMHCL_DAMPS_Project. "
+            "Default: main_tercile.py (NOT codes/main.py)."
+        ),
+    )
     ap.add_argument("--output", type=Path,
                     default=Path("./results/p6_5_p6_6_p6_9_clothing.json"))
     ap.add_argument("--log_dir", type=Path,
@@ -331,6 +386,36 @@ def main() -> None:
     ap.add_argument("--only_tags", type=str, nargs="*", default=None,
                     help="Optional filter: only run these variant tags.")
     args = ap.parse_args()
+
+    damps_dir = _resolve_damps_dir()
+    main_py = _resolve_main_py(damps_dir, Path(args.main))
+    print(f"[grid] damps_dir={damps_dir}")
+    print(f"[grid] main_py={main_py}")
+
+    # Resolve relative caches / outputs against damps_dir (prefer an
+    # already-existing cwd-relative path so repo-root launches that pass
+    # ``MMHCL_DAMPS_Project/results/...`` do not double-prefix).
+    def _abs(p: Path) -> Path:
+        if p.is_absolute():
+            return p.resolve()
+        under_cwd = (Path.cwd() / p).resolve()
+        under_damps = (damps_dir / p).resolve()
+        if under_cwd.exists() and not under_damps.exists():
+            return under_cwd
+        if under_damps.exists():
+            return under_damps
+        # Default write target lives under damps_dir.
+        return under_damps
+
+    args.output = _abs(args.output)
+    args.log_dir = _abs(args.log_dir)
+    args.base_cache = _abs(args.base_cache)
+    args.rsfp_prefix = _abs(args.rsfp_prefix)
+
+    if not args.base_cache.is_file():
+        raise FileNotFoundError(
+            f"Base interest cache missing: {args.base_cache}"
+        )
 
     args.log_dir.mkdir(parents=True, exist_ok=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -355,10 +440,13 @@ def main() -> None:
             print(f"\n{'='*72}\n"
                   f"[grid] {run_idx}/{total_runs}  "
                   f"tag={variant['tag']}  seed={seed}\n{'='*72}")
-            cmd = build_cli(args.python, args.main, variant, seed,
-                            args.log_dir, args.epoch)
+            cmd = build_cli(
+                args.python, main_py, variant, seed, args.log_dir, args.epoch
+            )
             log_path = args.log_dir / f"{variant['tag']}_seed{seed}.log"
-            exit_code, out, wall = _run_one(cmd, log_path, bool(args.dry_run))
+            exit_code, out, wall = _run_one(
+                cmd, log_path, bool(args.dry_run), cwd=damps_dir
+            )
             parsed = _parse_run_output(out) if not args.dry_run else {}
             row = {
                 "tag": variant["tag"],
@@ -455,19 +543,34 @@ def main() -> None:
         print(f"{r['tag']:<20} {r['block']:<15} {r20:>8.5f} "
               f"{dr20:+9.5f} {nd:>8.5f} {h:>8.5f} {m:>8.5f} {t:>8.5f}")
 
-    # Verdict.
+    # Verdict (tolerate all-NaN grids from failed launches).
     if not ranked:
         return
     winner = ranked[0]
-    print(f"\n=== VERDICT ===")
-    print(f"  Winner: '{winner['tag']}' ({winner['block']}) "
-          f"R@20={winner['recall20_mean']:.5f} "
-          f"(delta vs P6.4 = {winner['delta_vs_p6_4_r20']:+.5f}, "
-          f"delta vs p6_6c anchor = {winner['delta_vs_p6_6c_r20']:+.5f})")
-    d = winner['delta_vs_p6_6c_r20'] or 0.0
+    print("\n=== VERDICT ===")
+    r20 = winner.get("recall20_mean")
+    d_p64 = winner.get("delta_vs_p6_4_r20")
+    d = winner.get("delta_vs_p6_6c_r20")
+    if r20 is None:
+        n_fail = sum(1 for r in rows if r.get("exit", 0) != 0)
+        print(
+            f"  No successful metrics. Winner placeholder='{winner['tag']}' "
+            f"({winner['block']}). Failed runs: {n_fail}/{len(rows)}. "
+            "Inspect results/_p6_5_p6_6_p6_9_logs/*.log"
+        )
+        return
+    print(
+        f"  Winner: '{winner['tag']}' ({winner['block']}) "
+        f"R@20={r20:.5f} "
+        f"(delta vs P6.4 = {(d_p64 if d_p64 is not None else float('nan')):+.5f}, "
+        f"delta vs p6_6c anchor = {(d if d is not None else float('nan')):+.5f})"
+    )
+    d = d if d is not None else 0.0
     if d > 0.0005:
-        print(f"  R@20 improved over p6_6c_regs anchor by "
-              f"{d/p6_6c_regs_anchor['mean_r20']*100:.2f}%. Adopt config.")
+        print(
+            f"  R@20 improved over p6_6c_regs anchor by "
+            f"{d / p6_6c_regs_anchor['mean_r20'] * 100:.2f}%. Adopt config."
+        )
     elif d > -0.0005:
         print("  R@20 within noise band vs p6_6c anchor. No adoption.")
     else:
