@@ -241,6 +241,29 @@ def _test_with_terciles(self, users_to_test, is_val):
         _last_val_tercile.update(ter)
         _have_val_tercile[0] = True
 
+        # P6.5' bucket-geo-mean = (R@20_H * R@20_M * R@20_T) ** (1/3).
+        # Inject into ``result`` as a length-len(Ks) array so the early-stop
+        # patience block in train.py can read ``val["bucket_geo"][idx]``.
+        # Only Ks[-1]=20 is populated (matches Head/Mid/Tail definition);
+        # other slots are NaN so a mis-configured @K fails loudly.
+        try:
+            head = float(ter["head"])
+            mid  = float(ter["mid"])
+            tail = float(ter["tail"])
+            if math.isfinite(head) and math.isfinite(mid) and math.isfinite(tail) \
+               and head > 0.0 and mid > 0.0 and tail > 0.0:
+                geo = (head * mid * tail) ** (1.0 / 3.0)
+            else:
+                geo = 0.0
+            n_ks = int(len(result.get("recall", [0.0, 0.0])))
+            bg = np.full(max(n_ks, 2), float("nan"), dtype=np.float64)
+            bg[-1] = geo  # last-K slot (matches Ks[-1] convention)
+            if n_ks >= 2:
+                bg[1] = geo  # explicit @20 slot when Ks == [10, 20]
+            result["bucket_geo"] = bg
+        except Exception as _e:
+            print(f"[tercile] bucket_geo inject skipped: {_e}", flush=True)
+
         # PACER snapshots BEST_Test_Recall@20 at val_recall PEAK only
         # (train.py:801 `if val["recall"][1] > best_val_recall`). We mirror
         # that with a strict `>` comparison so the next is_val=False call
@@ -268,11 +291,18 @@ def _test_with_terciles(self, users_to_test, is_val):
         # Per-epoch WandB (adds Head/Mid/Tail alongside PACER's val/recall@20).
         if self.wandb is not None:
             try:
-                self.wandb.log({
+                _log_payload = {
                     "val/recall@20_Head": ter["head"],
                     "val/recall@20_Mid":  ter["mid"],
                     "val/recall@20_Tail": ter["tail"],
-                })
+                }
+                # P6.5' also log the bucket-geo-mean when it is finite.
+                _bg_arr = result.get("bucket_geo", None)
+                if _bg_arr is not None:
+                    _bg_val = float(_bg_arr[-1])
+                    if math.isfinite(_bg_val):
+                        _log_payload["val/bucket_geo@20"] = _bg_val
+                self.wandb.log(_log_payload)
             except Exception as _e:
                 print(f"[tercile] wandb.log(val) skipped: {_e}", flush=True)
 

@@ -238,6 +238,8 @@ def _build_tamer_item_mat(
     cache: dict[str, np.ndarray],
     alpha_interest: float,
     device: str = "cpu",
+    item_pop: np.ndarray | None = None,
+    pop_inverse_eta: float = 0.0,
 ) -> torch.Tensor:
     """Build a TAMER-augmented sparse ``Item_mat`` from modality feats + cache.
 
@@ -247,6 +249,10 @@ def _build_tamer_item_mat(
         cache: Output of ``codes.damps_tamer.load_interest_cache``.
         alpha_interest: Eq. 9 interest-branch weight.
         device: Device hint for the exact k-NN step inside the builder.
+        item_pop: P6.5' training-frequency vector ``[n_items,]`` (required
+            when ``pop_inverse_eta > 0``). See ``build_augmented_modality_graph``.
+        pop_inverse_eta: P6.5' popularity-inverse exponent applied to the
+            interest-branch matrices (s_c AND coef_csr). 0.0 = P6.4.
 
     Returns:
         Coalesced CPU sparse COO adjacency suitable for ``Trainer.Item_mat``.
@@ -272,6 +278,8 @@ def _build_tamer_item_mat(
         alphas=alphas,
         alpha_interest=float(alpha_interest),
         device=str(device),
+        item_pop=item_pop,
+        pop_inverse_eta=float(pop_inverse_eta),
     )
     return edge_index_to_sparse_adj(edge_index, edge_weight, n_items)
 
@@ -307,7 +315,14 @@ def _resolve_early_stopping_monitor(
     else:
         idx = len(ks) - 1
 
-    if "ndcg" in mon:
+    # P6.5' bucket-geo-mean monitor: geometric mean of Head/Mid/Tail Recall@K.
+    # The tercile wrapper (main_tercile.py) injects val["bucket_geo"] into the
+    # metrics dict before the patience block reads it. When the wrapper is not
+    # loaded (bare train.py entry-point), the key is absent and the patience
+    # loop falls back to recall as documented.
+    if "bucket_geo" in mon or "geo_mean" in mon or "bucket" in mon:
+        metric = "bucket_geo"
+    elif "ndcg" in mon:
         metric = "ndcg"
     elif "precision" in mon:
         metric = "precision"
@@ -423,6 +438,15 @@ class Trainer:
             getattr(args, "alpha_interest", 0.0)
         )
         self._enable_tamer: bool = bool(int(getattr(args, "enable_tamer", 0)))
+        # P6.5' popularity-inverse edge reweighting exponent + item_pop cache.
+        self._pop_inverse_eta: float = float(getattr(args, "pop_inverse_eta", 0.0))
+        self._item_pop: np.ndarray | None = None
+        if self._enable_tamer and self._pop_inverse_eta > 0.0:
+            _pop = np.zeros(data_generator.n_items, dtype=np.int64)
+            for _uid, _items in data_generator.train_items.items():
+                for _iid in _items:
+                    _pop[_iid] += 1
+            self._item_pop = _pop
         if self._enable_tamer:
             cache_path = str(getattr(args, "tamer_interest_cache", "") or "")
             if not cache_path or not os.path.isfile(cache_path):
@@ -749,10 +773,13 @@ class Trainer:
                 cache=self._tamer_cache,
                 alpha_interest=self._alpha_interest,
                 device=str(self.device),
+                item_pop=self._item_pop,
+                pop_inverse_eta=self._pop_inverse_eta,
             )
             self.logger.logging(
                 f"[Rebuild/TAMER] epoch={epoch} alpha_interest="
-                f"{self._alpha_interest:.3f}"
+                f"{self._alpha_interest:.3f} "
+                f"pop_inverse_eta={self._pop_inverse_eta:.3f}"
             )
         else:
             new_adj = self.knn_router.build_graph_from_modalities(
@@ -1100,6 +1127,7 @@ class Trainer:
         best_val_recall: float = 0.0      # max of val/recall@Ks[-1]
         best_val_ndcg: float = 0.0        # max of val/ndcg@Ks[-1]
         best_val_precision: float = 0.0   # max of val/precision@Ks[-1]
+        best_val_bucket_geo: float = 0.0  # P6.5' max of val/bucket_geo@Ks[-1]
         best_val_recall_epoch: int = -1   # epoch at which best_val_recall was reached
         best_val_ndcg_epoch: int = -1     # epoch at which best_val_ndcg was reached
         best_val_at_recall_peak: Optional[dict[str, Any]] = None
@@ -1500,11 +1528,26 @@ class Trainer:
                 "recall": best_val_recall,
                 "ndcg": best_val_ndcg,
                 "precision": prev_best_val_precision,
+                "bucket_geo": best_val_bucket_geo,
             }[mon_metric]
+            # P6.5' bucket-geo path: main_tercile.py injects val["bucket_geo"];
+            # if the wrapper is not loaded and the user selected bucket_geo
+            # anyway, degrade gracefully to recall so the run does not crash.
+            if mon_metric == "bucket_geo" and "bucket_geo" not in val:
+                mon_metric_eff = "recall"
+                mon_best_eff = best_val_recall
+            else:
+                mon_metric_eff = mon_metric
+                mon_best_eff = mon_best
             monitor_improved = (
-                float(val[mon_metric][mon_idx])
-                > mon_best + args.early_stopping_min_delta
+                float(val[mon_metric_eff][mon_idx])
+                > mon_best_eff + args.early_stopping_min_delta
             )
+            # Keep best_val_bucket_geo current for the next epoch's diff.
+            if "bucket_geo" in val:
+                cur_bg = float(val["bucket_geo"][mon_idx if mon_metric == "bucket_geo" else 1])
+                if cur_bg > best_val_bucket_geo:
+                    best_val_bucket_geo = cur_bg
             # Still run a test evaluation whenever recall OR ndcg improves
             # so peak snapshots stay correct; patience only listens to
             # ``monitor_improved``.
@@ -1715,6 +1758,20 @@ def main() -> None:
                 "TAMER Item_mat build requires image + text features."
             )
         tamer_cache = load_interest_cache(cache_path)
+        # P6.5' item popularity vector: training frequency per item.
+        pop_inv_eta = float(getattr(args, "pop_inverse_eta", 0.0))
+        item_pop_arr: np.ndarray | None = None
+        if pop_inv_eta > 0.0:
+            _pop = np.zeros(data_generator.n_items, dtype=np.int64)
+            for _uid, _items in data_generator.train_items.items():
+                for _iid in _items:
+                    _pop[_iid] += 1
+            item_pop_arr = _pop
+            print(
+                f"[P6.5'] item_pop stats: min={int(_pop.min())} "
+                f"max={int(_pop.max())} mean={float(_pop.mean()):.2f} "
+                f"silent(pop=0)={int((_pop == 0).sum())} of {_pop.size}"
+            )
         config["Item_mat"] = _build_tamer_item_mat(
             image_feats=data_generator.image_feats,
             text_feats=data_generator.text_feats,
@@ -1723,10 +1780,13 @@ def main() -> None:
             device=(
                 f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
             ),
+            item_pop=item_pop_arr,
+            pop_inverse_eta=pop_inv_eta,
         )
         print(
             f"[P6.4/TAMER] Item_mat replaced from {cache_path} "
             f"(alpha_interest={float(args.alpha_interest):.3f}, "
+            f"pop_inverse_eta={pop_inv_eta:.3f}, "
             f"nnz={config['Item_mat']._nnz()})"
         )
 

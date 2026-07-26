@@ -531,6 +531,21 @@ def parse_args() -> argparse.Namespace:
     )
 
     # =====================================================================
+    #  P6.5' Bucket-aware training (popularity-inverse edge reweighting +
+    #  bucket-geo-mean early-stopping monitor).
+    # =====================================================================
+    parser.add_argument(
+        "--pop_inverse_eta",
+        type=float,
+        default=0.0,
+        help="P6.5' popularity-inverse exponent applied to the interest "
+             "branch (s_c AND coef_csr tree bonus) as "
+             "M[i,j] *= (pop_i * pop_j) ** (-eta). 0.0 (default) = P6.4 "
+             "bit-for-bit compatibility; typical grid {0.5, 1.0}. Requires "
+             "--enable_tamer 1 and a valid --tamer_interest_cache.",
+    )
+
+    # =====================================================================
     #  Pattern B' (Scheduled Rebuild)
     # =====================================================================
     parser.add_argument("--rebuild_R", type=int, default=5,

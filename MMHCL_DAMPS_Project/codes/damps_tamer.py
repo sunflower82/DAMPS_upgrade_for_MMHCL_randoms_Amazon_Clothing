@@ -134,6 +134,8 @@ def build_augmented_modality_graph(
     alphas: Dict[str, float],
     alpha_interest: float,
     device: str = "cpu",
+    item_pop: Optional[np.ndarray] = None,
+    pop_inverse_eta: float = 0.0,
 ) -> Tuple[torch.Tensor, torch.Tensor, int]:
     """Return ``(edge_index, edge_weight, n_items)`` for the augmented graph.
 
@@ -149,6 +151,17 @@ def build_augmented_modality_graph(
                          set to 0.0 to recover the P6.3 modality-only graph
                          (bit-for-bit ablation control).
         device         : torch device for the exact k-NN step.
+        item_pop       : (n_items,) int/float array of training frequencies.
+                         Required when ``pop_inverse_eta > 0``.
+        pop_inverse_eta: P6.5' popularity-inverse edge reweighting exponent.
+                         When > 0, the interest-branch matrices (``s_c`` and
+                         ``coef_csr`` tree bonus) are scaled by
+                         ``(pop_i * pop_j) ** (-eta)`` so head-head cooc edges
+                         are downweighted and tail-tail edges are amplified.
+                         The intrinsic modality similarity ``base`` (top-k
+                         cosine) is left untouched -- popularity has no
+                         well-defined meaning on raw feature geometry.
+                         Set to 0.0 for P6.4 bit-for-bit compatibility.
     """
     knn_k_mod = int(cache["knn_k_mod"])
     knn_k_cooc = int(cache["knn_k_cooc"])
@@ -168,6 +181,24 @@ def build_augmented_modality_graph(
         and "tree_weights" in cache
         and cache["tree_anchors"].size > 0
     )
+    # P6.5' popularity-inverse diagonal: D_neg_eta = diag(pop^(-eta)).
+    # Applied only to interest-branch matrices (s_c and coef_csr).
+    d_neg_eta: Optional[sp.dia_matrix] = None
+    if alpha_interest > 0.0 and float(pop_inverse_eta) > 0.0:
+        if item_pop is None:
+            raise ValueError(
+                "pop_inverse_eta > 0 requires item_pop (n_items,) array."
+            )
+        pop_arr = np.asarray(item_pop, dtype=np.float64).reshape(-1)
+        if pop_arr.shape[0] != n_items:
+            raise ValueError(
+                f"item_pop shape {pop_arr.shape} does not match n_items={n_items}"
+            )
+        # Guard against silent items (pop == 0): floor at 1 so their scale is
+        # 1.0 (max amplification is applied to genuinely tail-visible items).
+        pop_safe = np.maximum(pop_arr, 1.0)
+        d_neg_eta = sp.diags(pop_safe ** (-float(pop_inverse_eta))).astype(np.float32)
+
     coef_csr: Optional[sp.csr_matrix] = None
     if has_flat_tree and alpha_interest > 0.0:
         # coef[i,j] = gamma * exp(-(order-1)) * w_ij^tau  (Eq. 7).
@@ -177,6 +208,9 @@ def build_augmented_modality_graph(
         t_w = cache["tree_weights"].astype(np.float32)
         coefs = (gamma * np.exp(-(t_o - 1.0)) * np.power(t_w, tau)).astype(np.float32)
         coef_csr = sp.csr_matrix((coefs, (t_a, t_n)), shape=(n_items, n_items))
+        if d_neg_eta is not None:
+            # coef_csr[i,j] *= pop_i^-eta * pop_j^-eta.
+            coef_csr = (d_neg_eta @ coef_csr @ d_neg_eta).tocsr()
         graph = None  # not needed on the fast path
     else:
         graph = build_weighted_binary_relations(
@@ -225,6 +259,11 @@ def build_augmented_modality_graph(
         row_sum[row_sum == 0.0] = 1.0
         d_inv = sp.diags(1.0 / row_sum)
         s_c = d_inv @ s_c
+        if d_neg_eta is not None:
+            # s_c[i,j] *= pop_i^-eta * pop_j^-eta after row-normalisation so
+            # the pop-inverse effect stacks on top of degree balance, not on
+            # the raw cooc counts.
+            s_c = (d_neg_eta @ s_c @ d_neg_eta).tocsr()
     else:
         s_c = None
 
