@@ -23,9 +23,27 @@ Pipeline
    ``M_blend = (1 - alpha) * M_orig + alpha * M_rsfp``.
 6. Re-top-k per row at ``knn_k_cooc`` (from the base cache) and save.
 
-The tree_* fields from the base cache are copied through UNCHANGED --
-they encode a BFS traversal that depends on the anchor set, not on the
-raw edge weights.  This keeps P6.5 minimally invasive.
+Tree handling (rev57 patch — P8.2 RSFP-tree fix)
+-----------------------------------------------
+By default (``--rebuild_tree 0`` == legacy P6.5 behaviour) the tree_*
+fields from the base cache are copied through UNCHANGED, so the interest-
+tree BFS bonus in ``codes/damps_tamer.build_augmented_modality_graph``
+coincides byte-for-byte with the P6.4 baseline. This gave a clean
+(and cheap) A1 vs A0 ablation stub, but the KSE-final 5-seed benchmark
+revealed that the resulting RSFP influence is limited to the direct
+``s_c`` branch (``alpha_interest * s_c``) — the interest-tree bonus
+(``coef_csr = f(tree_anchors, tree_neighbours, tree_orders, tree_weights)``
+applied per modality view) stays identical between the RSFP cache and
+the pure-cooc base cache. Effective RSFP share of the fused graph is
+therefore only ~2%, and the A1 ablation reduces to a no-op.
+
+With ``--rebuild_tree 1`` (recommended for P8.2+), after M_blend has
+been row-normalised, symmetrised, and top-k pruned, we re-run
+``codes.interest_tree.precompute_interest_tree_flat_parallel`` on the
+blended graph, so the new ``tree_*`` fields inherit the RSFP-mined
+2-itemset edges. The RSFP alpha then controls BOTH branches of Eq. 9
+(direct ``s_c`` AND the per-view ``coef_csr`` bonus), matching the
+KSE-final paper claim ("RSFPGrowth-augmented Interest-Tree Cache").
 
 Usage
 -----
@@ -339,6 +357,28 @@ def main() -> None:
         default=0,
         help="Ignore cached patterns.pkl and re-run RSFPGrowth.",
     )
+    # ---- P8.2 RSFP-tree fix ------------------------------------------------
+    ap.add_argument(
+        "--rebuild_tree",
+        type=int,
+        default=0,
+        help=(
+            "If 1, re-run codes.interest_tree.precompute_interest_tree_flat_* "
+            "on the RSFP-blended co-occurrence graph so tree_* fields carry "
+            "the RSFP signal. If 0 (legacy P6.5), copy tree_* from base_cache. "
+            "When enabled, output filenames get an extra `_tree` infix to "
+            "avoid overwriting P6.5 caches: `<prefix>_tree_a{alpha}.npz`."
+        ),
+    )
+    ap.add_argument(
+        "--tree_workers",
+        type=int,
+        default=0,
+        help=(
+            "Parallel workers for tree BFS when --rebuild_tree=1. 0 or 1 "
+            "means single-thread. Matches preprocess_interest_tree.py."
+        ),
+    )
     args = ap.parse_args()
 
     args.work_dir.mkdir(parents=True, exist_ok=True)
@@ -434,13 +474,24 @@ def main() -> None:
     M_rsfp = _row_max_normalise(M_rsfp)
 
     # 5) Blend + top-k per alpha; save.
+    if bool(args.rebuild_tree):
+        # Lazy import so the legacy path has no extra module load.
+        from codes.interest_tree import (  # noqa: E402
+            build_weighted_binary_relations,
+            precompute_interest_tree_flat,
+            precompute_interest_tree_flat_parallel,
+        )
+
     for alpha in args.alphas:
         M_blend = ((1.0 - alpha) * M_orig + alpha * M_rsfp).tocsr()
         M_blend = _symmetrise(M_blend)
         M_blend = _topk_per_row(M_blend, knn_k)
         coo = M_blend.tocoo()
         alpha_tag = f"a{int(round(alpha * 100)):03d}"
-        out_path = Path(f"{args.output_prefix}_{alpha_tag}.npz")
+        if bool(args.rebuild_tree):
+            out_path = Path(f"{args.output_prefix}_tree_{alpha_tag}.npz")
+        else:
+            out_path = Path(f"{args.output_prefix}_{alpha_tag}.npz")
 
         kwargs = {
             "cooc_rows": coo.row.astype(np.int64),
@@ -453,10 +504,40 @@ def main() -> None:
             "tau": base["tau"],
             "n_items": np.int32(n_items),
         }
-        # Copy tree_* fields verbatim (BFS is over anchors, not weights).
-        for k in ("tree_anchors", "tree_neighbours", "tree_orders", "tree_weights"):
-            if k in base:
-                kwargs[k] = base[k]
+
+        if bool(args.rebuild_tree):
+            # P8.2 fix: rebuild tree_* from the blended graph so RSFP
+            # signal reaches Eq. 7 (interest-tree bonus).
+            t_bfs = time.time()
+            graph = build_weighted_binary_relations(
+                coo.row.astype(np.int64),
+                coo.col.astype(np.int64),
+                coo.data.astype(np.float32),
+                knn_k,
+            )
+            n_order = int(base["n_order"])
+            if args.tree_workers and args.tree_workers > 1:
+                (t_a, t_n, t_o, t_w) = precompute_interest_tree_flat_parallel(
+                    graph, n_order, num_workers=int(args.tree_workers)
+                )
+            else:
+                (t_a, t_n, t_o, t_w) = precompute_interest_tree_flat(
+                    graph, n_order
+                )
+            wall_bfs = time.time() - t_bfs
+            kwargs["tree_anchors"] = t_a
+            kwargs["tree_neighbours"] = t_n
+            kwargs["tree_orders"] = t_o
+            kwargs["tree_weights"] = t_w
+            print(
+                f"[rsfp] rebuilt tree for alpha={alpha:.2f}: "
+                f"tree_nnz={t_a.shape[0]} ({wall_bfs:.2f}s)"
+            )
+        else:
+            # Legacy P6.5: copy tree_* fields verbatim from base cache.
+            for k in ("tree_anchors", "tree_neighbours", "tree_orders", "tree_weights"):
+                if k in base:
+                    kwargs[k] = base[k]
 
         np.savez_compressed(out_path, **kwargs)
         print(f"[rsfp] wrote {out_path}  (blend alpha={alpha:.2f}, nnz={coo.nnz})")
