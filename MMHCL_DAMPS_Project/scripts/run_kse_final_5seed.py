@@ -180,6 +180,115 @@ DEFAULT_SEEDS = [1616406634, 1640104851, 52093548, 109649638, 372270914]
 
 
 # ---------------------------------------------------------------------------
+# Option B: 13-variant grid to isolate RSFP x LogQ x NRDMC interactions.
+#   Group A (7 configs): in-batch A0 (alpha=0.10) + A1 (alpha=0)
+#                        + alpha sweep {0.02, 0.05, 0.08, 0.15, 0.20}
+#   Group B (4 configs): interaction / axis-toggle:
+#                        2-axis (LogQ + NRDMC, no TAMER),
+#                        1-axis LogQ-only, 1-axis NRDMC-only,
+#                        0-axis backbone (MMHCL only).
+#   Group C (2 configs): no LogQ + RSFP alpha=0.10  vs  no LogQ + base cooc.
+# All 13 variants share the same locked BASELINE_CLI hyperparameters as
+# run_kse_final_5seed.py; only the four overrides below vary:
+#   tamer_interest_cache, enable_tamer, enable_logq/logq_scale,
+#   enable_nrdmc_lite/nrdmc_lite_layers.
+# ---------------------------------------------------------------------------
+def build_grid_optb(rsfp_prefix: str, base_cache: str) -> list[dict]:
+    def _rsfp(tag: str) -> str:
+        # matches build_rsfp_interest_tree.py --rebuild_tree 1 output naming.
+        return f"{rsfp_prefix}_tree_{tag}.npz"
+
+    def _all_on(cache: str) -> dict:
+        return {
+            "tamer_interest_cache": cache,
+            "enable_tamer": 1,
+            "enable_logq": 1,
+            "logq_scale": 0.651,
+            "enable_nrdmc_lite": 1,
+            "nrdmc_lite_layers": 2,
+        }
+
+    return [
+        # ---- In-batch baselines for paired comparison ----
+        {"tag": "B00_A0_alpha010", "block": "OptB_baseline",
+         "label": "A0 in-batch (alpha=0.10, all 3 axes)",
+         "overrides": _all_on(_rsfp("a010"))},
+        {"tag": "B01_A1_alpha000", "block": "OptB_baseline",
+         "label": "A1 in-batch (base cooc, alpha=0)",
+         "overrides": _all_on(base_cache)},
+        # ---- Group A: alpha sweep on Clothing ----
+        {"tag": "B02_alpha002", "block": "OptB_alphaSweep",
+         "label": "alpha=0.02 (all 3 axes)",
+         "overrides": _all_on(_rsfp("a002"))},
+        {"tag": "B03_alpha005", "block": "OptB_alphaSweep",
+         "label": "alpha=0.05 (all 3 axes)",
+         "overrides": _all_on(_rsfp("a005"))},
+        {"tag": "B04_alpha008", "block": "OptB_alphaSweep",
+         "label": "alpha=0.08 (all 3 axes)",
+         "overrides": _all_on(_rsfp("a008"))},
+        {"tag": "B05_alpha015", "block": "OptB_alphaSweep",
+         "label": "alpha=0.15 (all 3 axes)",
+         "overrides": _all_on(_rsfp("a015"))},
+        {"tag": "B06_alpha020", "block": "OptB_alphaSweep",
+         "label": "alpha=0.20 (all 3 axes)",
+         "overrides": _all_on(_rsfp("a020"))},
+        # ---- Group B: interaction / axis-toggle ----
+        {"tag": "B07_2ax_LogQ_NRDMC", "block": "OptB_interaction",
+         "label": "2-axis: LogQ + NRDMC only (no TAMER)",
+         "overrides": {
+             "tamer_interest_cache": base_cache,  # unused when enable_tamer=0
+             "enable_tamer": 0,
+             "enable_logq": 1, "logq_scale": 0.651,
+             "enable_nrdmc_lite": 1, "nrdmc_lite_layers": 2}},
+        {"tag": "B08_1ax_LogQonly", "block": "OptB_interaction",
+         "label": "1-axis: LogQ only",
+         "overrides": {
+             "tamer_interest_cache": base_cache,
+             "enable_tamer": 0,
+             "enable_logq": 1, "logq_scale": 0.651,
+             "enable_nrdmc_lite": 0, "nrdmc_lite_layers": 0}},
+        {"tag": "B09_1ax_NRDMConly", "block": "OptB_interaction",
+         "label": "1-axis: NRDMC only",
+         "overrides": {
+             "tamer_interest_cache": base_cache,
+             "enable_tamer": 0,
+             "enable_logq": 0, "logq_scale": 0.0,
+             "enable_nrdmc_lite": 1, "nrdmc_lite_layers": 2}},
+        # ---- Group C: no LogQ + RSFP (A2-like) ----
+        {"tag": "B10_noLogQ_RSFP010", "block": "OptB_noLogQ",
+         "label": "no LogQ + RSFP alpha=0.10 (TAMER+NRDMC on)",
+         "overrides": {
+             "tamer_interest_cache": _rsfp("a010"),
+             "enable_tamer": 1,
+             "enable_logq": 0, "logq_scale": 0.0,
+             "enable_nrdmc_lite": 1, "nrdmc_lite_layers": 2}},
+        {"tag": "B11_noLogQ_cooc", "block": "OptB_noLogQ",
+         "label": "no LogQ + base cooc (control for B10)",
+         "overrides": {
+             "tamer_interest_cache": base_cache,
+             "enable_tamer": 1,
+             "enable_logq": 0, "logq_scale": 0.0,
+             "enable_nrdmc_lite": 1, "nrdmc_lite_layers": 2}},
+        # ---- Group B extra: 0-axis backbone (MMHCL only) ----
+        {"tag": "B12_backbone_only", "block": "OptB_interaction",
+         "label": "0-axis: MMHCL backbone (no TAMER, no LogQ, no NRDMC)",
+         "overrides": {
+             "tamer_interest_cache": base_cache,
+             "enable_tamer": 0,
+             "enable_logq": 0, "logq_scale": 0.0,
+             "enable_nrdmc_lite": 0, "nrdmc_lite_layers": 0}},
+    ]
+
+
+# Attach a distinct wandb_group so Option B runs don't collide with the
+# canonical kse_final_5seed grid in the dashboard.
+def _stamp_wandb_group(grid: list[dict], group: str) -> list[dict]:
+    for v in grid:
+        v["overrides"].setdefault("wandb_group", group)
+    return grid
+
+
+# ---------------------------------------------------------------------------
 # 4-variant grid: 1 full + 3 ablations
 # ---------------------------------------------------------------------------
 def build_grid(rsfp_cache: str, base_cache: str) -> list[dict]:
@@ -426,10 +535,19 @@ def main() -> None:
                     default=Path("./results/_kse_final_5seed_logs"))
     ap.add_argument("--rsfp_cache", type=Path,
                     default=Path("results/interest_tree_clothing_rsfp_a010.npz"))
+    ap.add_argument("--rsfp_prefix", type=Path,
+                    default=Path("results/interest_tree_clothing_rsfp"),
+                    help="Prefix for Option B alpha-sweep caches; the driver "
+                         "appends _tree_a{NNN}.npz per alpha.")
     ap.add_argument("--base_cache", type=Path,
                     default=Path("results/interest_tree_clothing.npz"))
     ap.add_argument("--dry_run", type=int, default=0)
     ap.add_argument("--only_tags", type=str, nargs="*", default=None)
+    ap.add_argument("--grid", type=str, default="kse4",
+                    choices=["kse4", "optb13"],
+                    help="kse4 = original 1-full + 3-ablation grid (5 seeds x "
+                         "250 epochs). optb13 = Option B 13-variant grid "
+                         "(alpha sweep + interaction + no-LogQ tests).")
     args = ap.parse_args()
 
     args.log_dir.mkdir(parents=True, exist_ok=True)
@@ -439,7 +557,13 @@ def main() -> None:
     print(f"[kse] main_py: {main_py}")
     print(f"[kse] seeds:   {args.seeds}")
 
-    grid = build_grid(str(args.rsfp_cache), str(args.base_cache))
+    if args.grid == "optb13":
+        grid = _stamp_wandb_group(
+            build_grid_optb(str(args.rsfp_prefix), str(args.base_cache)),
+            group="kse_optb_2seed_clothing",
+        )
+    else:
+        grid = build_grid(str(args.rsfp_cache), str(args.base_cache))
     if args.only_tags:
         grid = [v for v in grid if v["tag"] in set(args.only_tags)]
 
@@ -547,17 +671,19 @@ def main() -> None:
 
     if not aggregated:
         return
-    full = next((r for r in aggregated if r["tag"] == "A0_kse_full"), None)
+    # Choose the baseline for delta report: kse4 -> A0_kse_full; optb13 -> B00_A0_alpha010.
+    baseline_tag = "B00_A0_alpha010" if args.grid == "optb13" else "A0_kse_full"
+    full = next((r for r in aggregated if r["tag"] == baseline_tag), None)
     if not full:
         return
-    print("\n=== Ablation deltas (percentage points on * 100 scale, vs A0_kse_full) ===")
+    print(f"\n=== Ablation deltas (percentage points on * 100 scale, vs {baseline_tag}) ===")
     full_r20 = (full.get("best_test_recall20_mean") or 0) * 100
     full_nd  = (full.get("best_test_ndcg20_mean")   or 0) * 100
     full_h   = (full.get("best_test_head_recall20_mean") or 0) * 100
     full_m   = (full.get("best_test_mid_recall20_mean")  or 0) * 100
     full_t   = (full.get("best_test_tail_recall20_mean") or 0) * 100
     for r in aggregated:
-        if r["tag"] == "A0_kse_full":
+        if r["tag"] == baseline_tag:
             continue
         d_r20 = (r.get("best_test_recall20_mean") or 0) * 100 - full_r20
         d_nd  = (r.get("best_test_ndcg20_mean")   or 0) * 100 - full_nd
