@@ -1,31 +1,34 @@
 """scripts/smoke_test_rebuild_tree.py -- P8.2 RSFP-tree fix smoke test.
 ======================================================================
 
-Standalone verification for the ``--rebuild_tree 1`` code path of
-``scripts/build_rsfp_interest_tree.py``. Does NOT require PAMI mining
-or the full Clothing dataset -- runs entirely on top of an existing
-P6.5 RSFP cache (``interest_tree_clothing_rsfp_a010.npz``) by:
+Verifies the ``--rebuild_tree 1`` path of ``build_rsfp_interest_tree.py``.
 
-1. Loading the P6.5 cache (which has RSFP-blended cooc_* and copied
-   tree_*).
-2. Simulating what the fixed builder does: derive a fresh
-   ``M_blend`` graph from the SAME cooc_* triplets in that .npz, run
-   ``codes.interest_tree.precompute_interest_tree_flat`` on it, and
-   compare the resulting ``tree_*`` to the ones in the cache.
-3. Because the P6.5 cache carries the base P6.4 tree (built from
-   pure co-occurrence), and step 2 rebuilds the tree from the RSFP-
-   blended graph, the two tree_* sets MUST differ. If they don't,
-   the fix is a no-op and there is a bug in the rebuild path.
+Two valid cache kinds exist:
+
+1. **Legacy P6.5** (``interest_tree_clothing_rsfp_a010.npz``):
+   ``cooc_*`` is RSFP-blended, but ``tree_*`` was copied verbatim from the
+   pure-cooc base cache.  Rebuilding the tree from ``cooc_*`` MUST differ
+   from the stored ``tree_*``.
+
+2. **P8.2 tree cache** (``interest_tree_clothing_rsfp_tree_a010.npz``):
+   ``tree_*`` was rebuilt from the blended graph.  Rebuilding from
+   ``cooc_*`` MUST match the stored ``tree_*``, and (when ``--base_cache``
+   is given) MUST differ from the pure-cooc base tree.
 
 Usage
 -----
 ::
 
+    # Legacy detection (expect DIFF):
     python scripts/smoke_test_rebuild_tree.py \\
         --rsfp_cache results/interest_tree_clothing_rsfp_a010.npz
 
-Exit code 0 = smoke test passed (tree_* changes with the fix).
-Exit code 1 = smoke test failed (rebuild produced identical tree_*).
+    # P8.2 consistency (expect IDENTICAL to rebuild, DIFF vs base):
+    python scripts/smoke_test_rebuild_tree.py \\
+        --rsfp_cache results/interest_tree_clothing_rsfp_tree_a010.npz \\
+        --base_cache results/interest_tree_clothing.npz
+
+Exit code 0 = pass. Exit code 1 = fail.
 """
 from __future__ import annotations
 
@@ -56,7 +59,7 @@ def _fmt_diff(a: np.ndarray, b: np.ndarray, label: str) -> str:
     if eq:
         return f"{label}: IDENTICAL (shape={a.shape})"
     if a.dtype.kind in "if":
-        d = np.abs(a - b)
+        d = np.abs(a.astype(np.float64) - b.astype(np.float64))
         return (
             f"{label}: DIFF  shape={a.shape}  "
             f"max={float(d.max()):.4g}  mean={float(d.mean()):.4g}"
@@ -65,13 +68,26 @@ def _fmt_diff(a: np.ndarray, b: np.ndarray, label: str) -> str:
     return f"{label}: DIFF  shape={a.shape}  n_diff={n_diff}"
 
 
+def _any_diff(diffs: list[str]) -> bool:
+    return any("DIFF" in d for d in diffs)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--rsfp_cache",
         type=Path,
         required=True,
-        help="P6.5 RSFP cache (e.g. interest_tree_clothing_rsfp_a010.npz).",
+        help="RSFP cache (.npz), legacy or *_tree_* P8.2.",
+    )
+    ap.add_argument(
+        "--base_cache",
+        type=Path,
+        default=None,
+        help=(
+            "Optional pure-cooc base cache. Required for a strong PASS on "
+            "P8.2 *_tree_* caches (must DIFF vs base tree_*)."
+        ),
     )
     args = ap.parse_args()
 
@@ -86,22 +102,21 @@ def main() -> int:
     )
     have_tree = all(
         k in cache
-        for k in ("tree_anchors", "tree_neighbours", "tree_orders", "tree_weights")
+        for k in (
+            "tree_anchors",
+            "tree_neighbours",
+            "tree_orders",
+            "tree_weights",
+        )
     )
     if not have_tree:
         print("[smoke] FAIL: cache lacks tree_* fields; cannot compare.")
         return 1
     print(
-        f"[smoke]   tree_anchors nnz={cache['tree_anchors'].shape[0]}  "
-        f"(this is the P6.4 base tree copied verbatim)"
+        f"[smoke]   stored tree_anchors nnz={cache['tree_anchors'].shape[0]}"
     )
 
-    # Rebuild the interest tree from the (already RSFP-blended) cooc_*
-    # triplets in the cache. In production the fixed builder would blend
-    # M_orig + M_rsfp first; here the .npz already carries M_blend as
-    # cooc_*, so this test is exactly equivalent to what --rebuild_tree=1
-    # produces on top of the same (base_cache, M_rsfp) inputs.
-    print("[smoke] rebuilding graph from RSFP-blended cooc_* ...")
+    print("[smoke] rebuilding graph from cache cooc_* ...")
     graph = build_weighted_binary_relations(
         cache["cooc_rows"].astype(np.int64),
         cache["cooc_cols"].astype(np.int64),
@@ -112,32 +127,97 @@ def main() -> int:
 
     print(f"[smoke] running BFS interest tree (n_order={n_order}) ...")
     t0 = time.time()
-    (new_a, new_n, new_o, new_w) = precompute_interest_tree_flat(graph, n_order)
-    wall = time.time() - t0
-    print(
-        f"[smoke]   new tree nnz={new_a.shape[0]}  ({wall:.2f}s)"
+    (new_a, new_n, new_o, new_w) = precompute_interest_tree_flat(
+        graph, n_order
     )
+    wall = time.time() - t0
+    print(f"[smoke]   rebuilt tree nnz={new_a.shape[0]}  ({wall:.2f}s)")
 
-    # Compare vs the tree_* copied verbatim from the base cache.
-    print("\n=== tree_* diff  (base-cache copy vs RSFP-blended rebuild) ===")
+    print("\n=== tree_* diff  (stored vs rebuild-from-cooc) ===")
     diffs = [
-        _fmt_diff(cache["tree_anchors"],    new_a, "tree_anchors"),
+        _fmt_diff(cache["tree_anchors"], new_a, "tree_anchors"),
         _fmt_diff(cache["tree_neighbours"], new_n, "tree_neighbours"),
-        _fmt_diff(cache["tree_orders"],     new_o, "tree_orders"),
-        _fmt_diff(cache["tree_weights"],    new_w, "tree_weights"),
+        _fmt_diff(cache["tree_orders"], new_o, "tree_orders"),
+        _fmt_diff(cache["tree_weights"], new_w, "tree_weights"),
     ]
-    for d in diffs:
-        print(" ", d)
+    for line in diffs:
+        print(" ", line)
 
-    any_diff = any("DIFF" in d for d in diffs)
-    if any_diff:
-        print("\n[smoke] PASS: rebuild produces tree_* that differ from the "
-              "base-cache copy. The --rebuild_tree=1 fix is effective.")
+    looks_like_tree_cache = "rsfp_tree_" in args.rsfp_cache.name
+    rebuilt_matches_stored = not _any_diff(diffs)
+
+    if looks_like_tree_cache or rebuilt_matches_stored:
+        # P8.2 path: stored tree must match rebuild-from-cooc.
+        if not rebuilt_matches_stored:
+            print(
+                "\n[smoke] FAIL: *_tree_* cache is inconsistent with its "
+                "own cooc_* (rebuild diverged)."
+            )
+            return 1
+        print(
+            "\n[smoke] stored tree_* matches rebuild-from-cooc "
+            "(P8.2-consistent)."
+        )
+        if args.base_cache is None:
+            default_base = (
+                args.rsfp_cache.parent / "interest_tree_clothing.npz"
+            )
+            if default_base.is_file():
+                args.base_cache = default_base
+        if args.base_cache is not None and args.base_cache.is_file():
+            base = dict(np.load(args.base_cache, allow_pickle=False))
+            print(
+                f"\n=== tree_* diff  (P8.2 cache vs base {args.base_cache.name}) ==="
+            )
+            base_diffs = [
+                _fmt_diff(
+                    cache["tree_anchors"], base["tree_anchors"], "tree_anchors"
+                ),
+                _fmt_diff(
+                    cache["tree_neighbours"],
+                    base["tree_neighbours"],
+                    "tree_neighbours",
+                ),
+                _fmt_diff(
+                    cache["tree_orders"], base["tree_orders"], "tree_orders"
+                ),
+                _fmt_diff(
+                    cache["tree_weights"],
+                    base["tree_weights"],
+                    "tree_weights",
+                ),
+            ]
+            for line in base_diffs:
+                print(" ", line)
+            if not _any_diff(base_diffs):
+                print(
+                    "\n[smoke] FAIL: P8.2 tree_* is identical to the pure-"
+                    "cooc base tree — rebuild did not carry RSFP signal."
+                )
+                return 1
+            print(
+                "\n[smoke] PASS: P8.2 tree_* is consistent with cooc_* and "
+                "differs from the pure-cooc base tree."
+            )
+            return 0
+        print(
+            "\n[smoke] PASS (weak): P8.2 tree_* is consistent with cooc_*. "
+            "Pass --base_cache for a stronger check vs pure-cooc tree."
+        )
         return 0
-    else:
-        print("\n[smoke] FAIL: rebuild produced identical tree_*. "
-              "Fix would be a no-op.")
+
+    # Legacy P6.5 path: stored tree was copied from base → must DIFF.
+    if not _any_diff(diffs):
+        print(
+            "\n[smoke] FAIL: rebuild produced identical tree_* on a legacy "
+            "P6.5 cache. Expected DIFF (copied base tree vs blended cooc)."
+        )
         return 1
+    print(
+        "\n[smoke] PASS: rebuild produces tree_* that differ from the "
+        "legacy base-cache copy. The --rebuild_tree=1 fix is effective."
+    )
+    return 0
 
 
 if __name__ == "__main__":

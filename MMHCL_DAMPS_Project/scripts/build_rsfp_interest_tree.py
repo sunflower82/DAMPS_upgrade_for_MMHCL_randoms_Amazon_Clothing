@@ -82,17 +82,51 @@ sys.path.insert(0, str(_ROOT))
 # Train-pair loader (mirror of preprocess_interest_tree.py)
 # ---------------------------------------------------------------------------
 def _resolve_train_path(data_dir: Path, dataset: str, core: int) -> Path:
-    candidates = [
-        data_dir / dataset / f"{core}-core" / "train.json",
-        data_dir / dataset / "train.json",
-        data_dir / dataset / "train.txt",
-        data_dir / "train.txt",
+    """Locate train.json/txt, with fallbacks for common notebook path bugs.
+
+    Notebook cells sometimes pass ``REPO.parent / "data"`` instead of
+    ``REPO / "data"``.  When the requested dir is empty we also probe the
+    repo-root ``data/`` sibling of ``MMHCL_DAMPS_Project``.
+    """
+    data_dir = Path(data_dir)
+    roots = [
+        data_dir,
+        _ROOT.parent / "data",  # <repo>/data
+        Path.cwd().resolve().parent / "data",  # ../data from project cwd
+        Path.cwd().resolve() / "data",
     ]
-    for p in candidates:
-        if p.exists():
-            return p
+
+    searched: list[str] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            root_key = str(root.resolve())
+        except OSError:
+            root_key = str(root)
+        if root_key in seen:
+            continue
+        seen.add(root_key)
+        candidates = [
+            root / dataset / f"{core}-core" / "train.json",
+            root / dataset / "train.json",
+            root / dataset / "train.txt",
+            root / "train.txt",
+        ]
+        for path in candidates:
+            searched.append(str(path))
+            if path.is_file():
+                try:
+                    requested = data_dir.resolve()
+                except OSError:
+                    requested = data_dir
+                if path.resolve().parents[2] != requested and path.resolve().parent != requested:
+                    print(
+                        f"[rsfp] data_dir={data_dir} missed; "
+                        f"using fallback train file: {path}"
+                    )
+                return path
     raise FileNotFoundError(
-        f"No train file found. Searched: {[str(c) for c in candidates]}"
+        f"No train file found. Searched: {searched}"
     )
 
 
