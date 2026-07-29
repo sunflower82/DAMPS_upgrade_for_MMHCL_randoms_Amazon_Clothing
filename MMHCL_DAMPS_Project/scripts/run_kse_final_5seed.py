@@ -280,6 +280,45 @@ def build_grid_optb(rsfp_prefix: str, base_cache: str) -> list[dict]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# Honest ablation grid (Option C — §9.36):
+#   PACER-full-new (C0) = no LogQ + base cooc + TAMER on + NRDMC-lite on
+#                         (= B11 config from optb13 grid)
+#   A1_noNRDMC     (C1) = same as C0 but with NRDMC-lite off (lambda_cl=0)
+# This 2-cell ablation gives the single-axis architectural necessity test
+# after the 5-seed rescue verdict (C) BOTH FAIL on Data and Loss axes.
+# ---------------------------------------------------------------------------
+def build_grid_honest(base_cache: str) -> list[dict]:
+    return [
+        {
+            "tag": "C0_pacer_full_new",
+            "block": "KSE_honest_full",
+            "label": "PACER-full-new (no LogQ + base cooc + NRDMC-lite on)",
+            "overrides": {
+                "tamer_interest_cache": base_cache,
+                "enable_tamer": 1,
+                "enable_logq": 0,
+                "logq_scale": 0.0,
+                "enable_nrdmc_lite": 1,
+                "nrdmc_lite_layers": 2,
+            },
+        },
+        {
+            "tag": "C1_A1_noNRDMC",
+            "block": "KSE_honest_ablation",
+            "label": "A1 -- w/o NRDMC-lite (no LogQ + base cooc + NRDMC off)",
+            "overrides": {
+                "tamer_interest_cache": base_cache,
+                "enable_tamer": 1,
+                "enable_logq": 0,
+                "logq_scale": 0.0,
+                "enable_nrdmc_lite": 0,
+                "nrdmc_lite_layers": 0,
+            },
+        },
+    ]
+
+
 # Attach a distinct wandb_group so Option B runs don't collide with the
 # canonical kse_final_5seed grid in the dashboard.
 def _stamp_wandb_group(grid: list[dict], group: str) -> list[dict]:
@@ -544,10 +583,13 @@ def main() -> None:
     ap.add_argument("--dry_run", type=int, default=0)
     ap.add_argument("--only_tags", type=str, nargs="*", default=None)
     ap.add_argument("--grid", type=str, default="kse4",
-                    choices=["kse4", "optb13"],
+                    choices=["kse4", "optb13", "honest"],
                     help="kse4 = original 1-full + 3-ablation grid (5 seeds x "
                          "250 epochs). optb13 = Option B 13-variant grid "
-                         "(alpha sweep + interaction + no-LogQ tests).")
+                         "(alpha sweep + interaction + no-LogQ tests). "
+                         "honest = 2-cell Option C ablation (C0 PACER-full-new "
+                         "= no LogQ + base cooc + NRDMC on; C1 = C0 without "
+                         "NRDMC-lite). Used in notebook \u00a79.36.")
     args = ap.parse_args()
 
     args.log_dir.mkdir(parents=True, exist_ok=True)
@@ -561,6 +603,11 @@ def main() -> None:
         grid = _stamp_wandb_group(
             build_grid_optb(str(args.rsfp_prefix), str(args.base_cache)),
             group="kse_optb_2seed_clothing",
+        )
+    elif args.grid == "honest":
+        grid = _stamp_wandb_group(
+            build_grid_honest(str(args.base_cache)),
+            group="kse_honest_ablation_clothing",
         )
     else:
         grid = build_grid(str(args.rsfp_cache), str(args.base_cache))
@@ -672,7 +719,12 @@ def main() -> None:
     if not aggregated:
         return
     # Choose the baseline for delta report: kse4 -> A0_kse_full; optb13 -> B00_A0_alpha010.
-    baseline_tag = "B00_A0_alpha010" if args.grid == "optb13" else "A0_kse_full"
+    if args.grid == "optb13":
+        baseline_tag = "B00_A0_alpha010"
+    elif args.grid == "honest":
+        baseline_tag = "C0_pacer_full_new"
+    else:
+        baseline_tag = "A0_kse_full"
     full = next((r for r in aggregated if r["tag"] == baseline_tag), None)
     if not full:
         return
